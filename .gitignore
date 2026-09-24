@@ -1,0 +1,11 @@
+.venv
+.env
+.dotenv
+service_account.json
+client_secret.json
+token.json
+state/
+output/
+logs/
+*.csv
+__pycache__

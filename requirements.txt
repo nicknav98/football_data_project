@@ -1,0 +1,11 @@
+pandas
+numpy
+requests
+pyarrow
+anthropic
+boto3
+python-dotenv
+streamlit
+google-api-python-client
+google-auth
+google-auth-oauthlib
