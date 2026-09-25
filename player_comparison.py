@@ -5,6 +5,7 @@ from __future__ import annotations
 from io import BytesIO
 import os
 from pathlib import Path
+import re
 
 import boto3
 import pandas as pd
@@ -15,6 +16,8 @@ ROOT = Path(__file__).resolve().parent
 IDENTITY_COLUMNS = {"league_id", "season", "fixture_id", "team_id", "player_id", "games_number"}
 AVERAGE_METRICS = {"games_rating", "passes_accuracy"}
 EXCLUDED_METRICS = IDENTITY_COLUMNS | {"games_minutes", "games_captain", "games_substitute"}
+MATCHDAY_KEY = re.compile(r"(?:^|/)league_(\d+)/season_(\d+)/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$")
+ROW_KEY = ["league_id", "season", "fixture_id", "team_id", "player_id"]
 
 
 def configure_environment() -> tuple[str, str]:
@@ -28,7 +31,7 @@ def configure_environment() -> tuple[str, str]:
 
 
 def read_matchdays() -> tuple[pd.DataFrame, int]:
-    """Read every CSV under the configured S3 prefix, including paginated keys."""
+    """Read matchday CSVs under the configured S3 prefix, including paginated keys."""
     bucket, prefix = configure_environment()
     region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
     s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
@@ -39,20 +42,26 @@ def read_matchdays() -> tuple[pd.DataFrame, int]:
     for page in paginator.paginate(Bucket=bucket, Prefix=listing_prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
-            if not key.lower().endswith(".csv"):
+            match = MATCHDAY_KEY.search(key)
+            if not match:
                 continue
             body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-            frames.append(pd.read_csv(BytesIO(body), low_memory=False))
+            frame = pd.read_csv(BytesIO(body), low_memory=False)
+            expected = tuple(map(int, match.groups()))
+            for column, value in zip(("league_id", "season"), expected):
+                if column not in frame or not frame[column].eq(value).all():
+                    raise ValueError(f"{key} has an invalid {column}")
+            frames.append(frame)
             count += 1
     if not frames:
-        raise ValueError(f"No CSV files found in s3://{bucket}/{listing_prefix}")
+        raise ValueError(f"No matchday CSV files found in s3://{bucket}/{listing_prefix}")
 
     data = pd.concat(frames, ignore_index=True)
-    required = {"player_id", "player_name", "fixture_id", "team_id", "team_name"}
+    required = set(ROW_KEY) | {"player_name", "team_name"}
     missing = required - set(data.columns)
     if missing:
         raise ValueError(f"S3 CSV files are missing required columns: {', '.join(sorted(missing))}")
-    data = data.drop_duplicates(["fixture_id", "team_id", "player_id"], keep="last")
+    data = data.drop_duplicates(ROW_KEY, keep="last")
     return data, count
 
 

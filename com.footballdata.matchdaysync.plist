@@ -15,7 +15,7 @@
     <string>/Users/nicknav98/Code/football_data_project</string>
 
     <!-- Runs every 3 hours; the script itself is a no-op unless a new
-         matchday finished or a recent one needs a stability re-check. -->
+         matchday needs syncing or recent fixture stats need rechecking. -->
     <key>StartInterval</key>
     <integer>10800</integer>
 

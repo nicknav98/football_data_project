@@ -28,6 +28,10 @@ except Exception as exc:
     st.stop()
 
 st.sidebar.caption(f"{file_count} CSV files loaded. Data refreshes every 10 minutes.")
+if "league_id" in data:
+    leagues = sorted(data["league_id"].dropna().unique().tolist())
+    chosen_leagues = st.sidebar.multiselect("Leagues", leagues, default=leagues)
+    data = data[data["league_id"].isin(chosen_leagues)]
 if "season" in data:
     seasons = sorted(data["season"].dropna().unique().tolist(), reverse=True)
     chosen_seasons = st.sidebar.multiselect("Seasons", seasons, default=seasons)

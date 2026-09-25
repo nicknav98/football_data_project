@@ -1,12 +1,11 @@
 """
 Databricks Auto Loader (cloudFiles) ingestion for the matchday player-stats
-CSVs produced by sync_matchday_stats.py (one file per
-ENG_Premier_League_Matchday_NN.csv, uploaded to an S3 bucket that's
+CSVs produced by sync_matchday_stats.py (one file per matchday, uploaded to an S3 bucket that's
 mounted/synced into a Databricks Volume, e.g.
 /Volumes/workspace/football_data_project/football_data/).
 
 Schema below matches the actual CSV columns/types as written by pandas'
-DataFrame.to_csv (see output/ENG_Premier_League_Matchday_*.csv): any stat
+DataFrame.to_csv (see output/league_*/season_*/*_MATCHDAY_*.csv): any stat
 column that can be missing for a player comes out as a float column
 ("1.0", "" for null) because of how pandas upcasts int64 -> float64 in the
 presence of NaN, even though the values are conceptually whole numbers.
@@ -76,33 +75,38 @@ SCHEMA = StructType(
 def read_matchday_stream(spark, source_path, schema_location):
     """Auto Loader stream over the matchday CSVs.
 
-    source_path:     e.g. "/Volumes/main/football/raw/matchday_csvs" (wherever
-                      the Drive-synced CSVs land in Databricks).
+    source_path:     e.g. "/Volumes/main/football/raw" (wherever
+                      the S3-synced CSVs land in Databricks).
     schema_location:  e.g. "/Volumes/main/football/_schemas/matchday_stats" -
                       Auto Loader persists/evolves the inferred schema here
                       across stream restarts; give each source its own path.
     """
-    return (
+    stream = (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "csv")
         .option("cloudFiles.schemaLocation", schema_location)
         .option("cloudFiles.inferColumnTypes", "true")
         .option("cloudFiles.schemaHints", SCHEMA.simpleString())
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
-        # sync_matchday_stats.py re-uploads a matchday's CSV to the *same*
-        # S3 key when api-football corrects stats within STABILITY_WINDOW -
-        # without this, Auto Loader ignores a file it has already seen even
+        # sync_matchday_stats.py re-uploads a matchday's CSV to the same
+        # S3 key when api-football corrects stats within STABILITY_WINDOW.
+        # Without this, Auto Loader ignores a file it has already seen even
         # if its content changed, and the correction would never arrive.
         .option("cloudFiles.allowOverwrites", "true")
         .option("header", "true")
         .load(source_path)
     )
+    # The existing source may still hold legacy or per-fixture CSVs. Only
+    # ingest files from the current league/season/matchday layout.
+    return stream.filter(
+        stream["_metadata.file_path"].rlike(
+            r"/league_\d+/season_\d+/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$"
+        )
+    )
 
 
-# A row is uniquely identified by which player played in which fixture for
-# which team - used to upsert corrected matchdays instead of re-appending
-# duplicate rows for players already ingested.
-MERGE_KEYS = ("fixture_id", "team_id", "player_id")
+# A row is uniquely identified by league, season, fixture, team, and player.
+MERGE_KEYS = ("league_id", "season", "fixture_id", "team_id", "player_id")
 
 
 def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, target_table):
