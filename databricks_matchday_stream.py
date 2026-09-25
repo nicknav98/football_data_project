@@ -86,7 +86,7 @@ def read_matchday_stream(spark, source_path, schema_location):
         .option("cloudFiles.format", "csv")
         .option("cloudFiles.schemaLocation", schema_location)
         .option("cloudFiles.inferColumnTypes", "true")
-        .option("cloudFiles.schemaHints", SCHEMA.simpleString())
+        .option("cloudFiles.schemaHints", ", ".join(f"{f.name} {f.dataType.simpleString()}" for f in SCHEMA.fields))
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         # sync_matchday_stats.py re-uploads a matchday's CSV to the same
         # S3 key when api-football corrects stats within STABILITY_WINDOW.
@@ -97,10 +97,10 @@ def read_matchday_stream(spark, source_path, schema_location):
         .load(source_path)
     )
     # The existing source may still hold legacy or per-fixture CSVs. Only
-    # ingest files from the current league/season/matchday layout.
+    # ingest files from the current matchday layout (flat or nested).
     return stream.filter(
         stream["_metadata.file_path"].rlike(
-            r"/league_\d+/season_\d+/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$"
+            r"[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$"
         )
     )
 
@@ -126,6 +126,9 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
     from delta.tables import DeltaTable
 
     def upsert_batch(micro_batch_df, batch_id):
+        from pyspark.sql.functions import current_timestamp
+        micro_batch_df = micro_batch_df.withColumn("ingestion_time", current_timestamp())
+
         if not spark.catalog.tableExists(target_table):
             micro_batch_df.write.format("delta").saveAsTable(target_table)
             return
