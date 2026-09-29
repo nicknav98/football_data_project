@@ -97,10 +97,10 @@ def read_matchday_stream(spark, source_path, schema_location):
         .load(source_path)
     )
     # The existing source may still hold legacy or per-fixture CSVs. Only
-    # ingest files from the current matchday layout (flat or nested).
+    # ingest files from the current league/season/matchday layout.
     return stream.filter(
         stream["_metadata.file_path"].rlike(
-            r"[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$"
+            r"/league_\d+/season_\d+/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_[A-Z0-9_]+\.csv$"
         )
     )
 

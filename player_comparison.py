@@ -16,7 +16,7 @@ ROOT = Path(__file__).resolve().parent
 IDENTITY_COLUMNS = {"league_id", "season", "fixture_id", "team_id", "player_id", "games_number"}
 AVERAGE_METRICS = {"games_rating", "passes_accuracy"}
 EXCLUDED_METRICS = IDENTITY_COLUMNS | {"games_minutes", "games_captain", "games_substitute"}
-MATCHDAY_KEY = re.compile(r"(?:^|/)league_(\d+)/season_(\d+)/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_\d+\.csv$")
+MATCHDAY_KEY = re.compile(r"(?:^|/)league_(\d+)/season_(\d+)/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_[A-Z0-9_]+\.csv$")
 ROW_KEY = ["league_id", "season", "fixture_id", "team_id", "player_id"]
 
 

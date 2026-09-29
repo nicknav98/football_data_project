@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync matchday player statistics for Europe's five major leagues to S3."""
+"""Sync three seasons of matchday player stats for five European leagues."""
 import json
 import os
 import re
@@ -44,6 +44,10 @@ def load_env(path=ROOT / ".env"):
 load_env()
 
 SEASON = int(os.environ.get("FOOTBALL_SEASON", 2026))
+HISTORY_SEASONS = int(os.environ.get("FOOTBALL_HISTORY_SEASONS", 2))
+if HISTORY_SEASONS < 0:
+    raise ValueError("FOOTBALL_HISTORY_SEASONS must be zero or greater")
+SEASONS = tuple(range(SEASON - HISTORY_SEASONS, SEASON + 1))
 API_KEY = os.environ["FOOTBALL_API_KEY"]
 AWS_S3_BUCKET = os.environ["AWS_S3_BUCKET"]
 AWS_S3_PREFIX = os.environ.get("AWS_S3_PREFIX", "").strip("/")
@@ -80,8 +84,8 @@ def api_get(path, params=None, max_retries=3):
     r.raise_for_status()  # retries exhausted, surface the last error
 
 
-def get_fixtures(league_id):
-    return api_get("/fixtures", params={"league": league_id, "season": SEASON})["response"]
+def get_fixtures(league_id, season):
+    return api_get("/fixtures", params={"league": league_id, "season": season})["response"]
 
 
 def get_fixture_player_stats(fixture_id):
@@ -112,17 +116,19 @@ def flatten_fixture_players(fixture_id, round_name, payload):
     return rows
 
 
-def fixture_identity(league_id, fixture_id):
-    return f"{league_id}:{SEASON}:{fixture_id}"
+def fixture_identity(league_id, season, fixture_id):
+    return f"{league_id}:{season}:{fixture_id}"
 
 
-def matchday_path(league_id, round_name):
+def matchday_path(league_id, season, round_name):
     match = re.search(r"(?:^|\s-\s)(\d+)\s*$", round_name)
-    if not match:
-        raise ValueError(f"Cannot determine matchday number from {round_name!r}")
+    suffix = (f"{int(match.group(1)):02d}" if match else
+              re.sub(r"[^A-Z0-9]+", "_", round_name.upper()).strip("_"))
+    if not suffix:
+        raise ValueError("Round name cannot be empty")
     country, league_name = LEAGUES[league_id]
-    filename = f"{country}_{league_name}_MATCHDAY_{int(match.group(1)):02d}.csv"
-    return f"league_{league_id}/season_{SEASON}/{filename}"
+    filename = f"{country}_{league_name}_MATCHDAY_{suffix}.csv"
+    return f"league_{league_id}/season_{season}/{filename}"
 
 
 def load_state():
@@ -138,10 +144,10 @@ def save_state(state):
     pending.replace(STATE_PATH)
 
 
-def fixture_needs_processing(league_id, fixture, state):
+def fixture_needs_processing(league_id, season, fixture, state):
     """Fetch new fixtures and recheck fixtures within the correction window."""
     fixture_id = fixture["fixture"]["id"]
-    previous = state.get(fixture_identity(league_id, fixture_id))
+    previous = state.get(fixture_identity(league_id, season, fixture_id))
     if not previous or previous.get("output_format") != "matchday":
         return True
     if previous.get("round") != fixture["league"]["round"]:
@@ -171,71 +177,80 @@ def upload_to_s3(s3, local_path, key):
     return uri
 
 
+def sync_league_season(league_id, season, state, s3):
+    fixtures = get_fixtures(league_id, season)
+    if not fixtures:
+        raise ValueError(f"No fixtures returned for league {league_id}, season {season}")
+    print(f"{len(fixtures)} fixtures found for league {league_id} season {season}")
+    rounds = defaultdict(list)
+    for fixture in fixtures:
+        if fixture["league"]["id"] != league_id or fixture["league"]["season"] != season:
+            raise ValueError(f"Fixture {fixture['fixture']['id']} does not match league {league_id}, season {season}")
+        if fixture["fixture"]["status"]["short"] in FINISHED_STATUSES:
+            rounds[fixture["league"]["round"]].append(fixture)
+
+    paths = [matchday_path(league_id, season, round_name) for round_name in rounds]
+    if len(paths) != len(set(paths)):
+        raise ValueError(f"League {league_id}, season {season} has rounds that map to the same matchday file")
+
+    synced = 0
+    for round_name, finished in rounds.items():
+        if not any(fixture_needs_processing(league_id, season, f, state) for f in finished):
+            continue
+
+        # A matchday file is replaced as a unit. Fetch every finished fixture
+        # in the round so postponed matches and corrections remain together.
+        rows = []
+        for fixture in finished:
+            fixture_id = fixture["fixture"]["id"]
+            print(f"league {league_id}, season {season}, fixture {fixture_id}: fetching player stats")
+            payload = get_fixture_player_stats(fixture_id)
+            fixture_rows = flatten_fixture_players(fixture_id, round_name, payload)
+            if not fixture_rows:
+                raise ValueError(f"Fixture {fixture_id} returned no player statistics; leaving state unchanged")
+            rows.extend(fixture_rows)
+
+        df = pd.DataFrame(rows)
+        df.insert(0, "season", season)
+        df.insert(0, "league_id", league_id)
+
+        relative_path = matchday_path(league_id, season, round_name)
+        local_path = OUTPUT_DIR / relative_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(local_path, index=False)
+        print(f"  wrote {len(df)} rows x {len(df.columns)} cols to {local_path}")
+
+        key = f"{AWS_S3_PREFIX}/{relative_path}" if AWS_S3_PREFIX else relative_path
+        s3_uri = upload_to_s3(s3, local_path, key)
+
+        synced_at = datetime.now(timezone.utc).isoformat()
+        for fixture in finished:
+            fixture_id = fixture["fixture"]["id"]
+            state[fixture_identity(league_id, season, fixture_id)] = {
+                "league_id": league_id,
+                "season": season,
+                "fixture_id": fixture_id,
+                "round": round_name,
+                "output_format": "matchday",
+                "last_synced": synced_at,
+                "s3_uri": s3_uri,
+            }
+        save_state(state)
+        synced += 1
+    return synced
+
+
 def main():
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     state = load_state()
     s3 = build_s3_client()
 
-    any_synced = False
-    for league_id in LEAGUES:
-        fixtures = get_fixtures(league_id)
-        print(f"{len(fixtures)} fixtures found for league {league_id} season {SEASON}")
-        rounds = defaultdict(list)
-        for fixture in fixtures:
-            if fixture["league"]["id"] != league_id or fixture["league"]["season"] != SEASON:
-                raise ValueError(f"Fixture {fixture['fixture']['id']} does not match league {league_id}, season {SEASON}")
-            if fixture["fixture"]["status"]["short"] in FINISHED_STATUSES:
-                rounds[fixture["league"]["round"]].append(fixture)
+    synced = 0
+    for season in SEASONS:
+        for league_id in LEAGUES:
+            synced += sync_league_season(league_id, season, state, s3)
 
-        paths = [matchday_path(league_id, round_name) for round_name in rounds]
-        if len(paths) != len(set(paths)):
-            raise ValueError(f"League {league_id} has round names that map to the same matchday file")
-
-        for round_name, finished in rounds.items():
-            if not any(fixture_needs_processing(league_id, f, state) for f in finished):
-                continue
-
-            # A matchday file is replaced as a unit. Fetch every finished fixture
-            # in the round so postponed matches and corrections remain together.
-            rows = []
-            for fixture in finished:
-                fixture_id = fixture["fixture"]["id"]
-                print(f"league {league_id}, fixture {fixture_id}: fetching player stats")
-                payload = get_fixture_player_stats(fixture_id)
-                fixture_rows = flatten_fixture_players(fixture_id, round_name, payload)
-                if not fixture_rows:
-                    raise ValueError(f"Fixture {fixture_id} returned no player statistics; leaving state unchanged")
-                rows.extend(fixture_rows)
-
-            df = pd.DataFrame(rows)
-            df.insert(0, "season", SEASON)
-            df.insert(0, "league_id", league_id)
-
-            relative_path = matchday_path(league_id, round_name)
-            local_path = OUTPUT_DIR / relative_path
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-            df.to_csv(local_path, index=False)
-            print(f"  wrote {len(df)} rows x {len(df.columns)} cols to {local_path}")
-
-            key = f"{AWS_S3_PREFIX}/{relative_path}" if AWS_S3_PREFIX else relative_path
-            s3_uri = upload_to_s3(s3, local_path, key)
-
-            synced_at = datetime.now(timezone.utc).isoformat()
-            for fixture in finished:
-                fixture_id = fixture["fixture"]["id"]
-                state[fixture_identity(league_id, fixture_id)] = {
-                    "league_id": league_id,
-                    "season": SEASON,
-                    "fixture_id": fixture_id,
-                    "round": round_name,
-                    "output_format": "matchday",
-                    "last_synced": synced_at,
-                    "s3_uri": s3_uri,
-                }
-            save_state(state)
-            any_synced = True
-
-    if not any_synced:
+    if not synced:
         print("No matchdays needed syncing.")
 
 

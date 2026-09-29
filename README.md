@@ -22,11 +22,17 @@ by passes attempted where available. The comparison can be downloaded as CSV.
 ### Five league matchday sync
 
 `sync_matchday_stats.py` fetches Premier League (39), La Liga (140), Bundesliga
-(78), Serie A (135), and Ligue 1 (61) for `FOOTBALL_SEASON` (default 2026).
+(78), Serie A (135), and Ligue 1 (61) for `FOOTBALL_SEASON` (default 2026)
+and the two preceding seasons. Set `FOOTBALL_HISTORY_SEASONS` to change
+the history depth (default 2). With the defaults, it syncs 2024 through 2026.
 It writes one CSV per matchday under `AWS_S3_PREFIX`, for example
 `league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv` and
-`league_140/season_2026/ESP_LA_LIGA_MATCHDAY_01.csv`. Each row retains
-`league_id`, `season`, and `fixture_id`. State lives in
+`league_140/season_2026/ESP_LA_LIGA_MATCHDAY_01.csv`. For rounds without a
+number, the suffix uses the round name, such as
+`GER_BUNDESLIGA_MATCHDAY_RELEGATION_ROUND.csv`. Each row retains
+`league_id`, `season`, and `fixture_id`. A player's appearances remain separate
+by league, season, fixture, team, and player ID, including after transfers.
+State lives in
 `state/processed_fixtures.json`, keyed by `league_id:season:fixture_id`.
 
 The first run with this layout refetches completed fixtures because prior state
