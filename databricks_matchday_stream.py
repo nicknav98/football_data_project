@@ -128,6 +128,7 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
     def upsert_batch(micro_batch_df, batch_id):
         from pyspark.sql.functions import current_timestamp
         micro_batch_df = micro_batch_df.withColumn("ingestion_time", current_timestamp())
+        micro_batch_df = micro_batch_df.dropDuplicates(list(MERGE_KEYS))
 
         if not spark.catalog.tableExists(target_table):
             micro_batch_df.write.format("delta").saveAsTable(target_table)
