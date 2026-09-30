@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import pandas as pd
 import streamlit as st
 
@@ -21,11 +23,14 @@ def load_data() -> tuple[pd.DataFrame, int]:
 if st.sidebar.button("Refresh S3 data"):
     load_data.clear()
 
+data: pd.DataFrame = pd.DataFrame()
+file_count = 0
 try:
     data, file_count = load_data()
 except Exception as exc:
     st.error(f"Could not load player data: {exc}")
     st.stop()
+    sys.exit(1)
 
 st.sidebar.caption(f"{file_count} CSV files loaded. Data refreshes every 10 minutes.")
 if "league_id" in data:
