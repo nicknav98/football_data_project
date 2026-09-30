@@ -1,8 +1,24 @@
 """
 Databricks Auto Loader (cloudFiles) ingestion for the matchday player-stats
-CSVs produced by sync_matchday_stats.py (one file per matchday, uploaded to an S3 bucket that's
-mounted/synced into a Databricks Volume, e.g.
-/Volumes/workspace/football_data_project/football_data/).
+CSVs produced by sync_matchday_stats.py (one file per matchday, uploaded to an S3
+bucket that's synced into a Databricks Volume via update_volume_with_s3_data).
+
+The volume is organised into season subdirectories:
+  /Volumes/workspace/football_data_project/football_data/
+      2024/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
+      2024/ESP_LA_LIGA_MATCHDAY_06.csv
+      ...
+      2025/ENG_PREMIER_LEAGUE_MATCHDAY_06.csv
+      ...
+      2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
+      ...
+      player_profiles.csv   (not season-specific, lives in root)
+
+This structure replaced the old flat layout where files from different seasons
+overwrote each other because the filenames lacked a year.  The S3 source
+itself uses league_{id}/season_{year}/... keys (see sync_matchday_stats.py);
+update_volume_with_s3_data preserves the season by placing each CSV into the
+matching YYYY/ subdirectory on the volume.
 
 Schema below matches the actual CSV columns/types as written by pandas'
 DataFrame.to_csv (see output/league_*/season_*/*_MATCHDAY_*.csv): any stat
@@ -75,9 +91,10 @@ SCHEMA = StructType(
 def read_matchday_stream(spark, source_path, schema_location):
     """Auto Loader stream over the matchday CSVs.
 
-    source_path:     e.g. "/Volumes/main/football/raw" (wherever
-                      the S3-synced CSVs land in Databricks).
-    schema_location:  e.g. "/Volumes/main/football/_schemas/matchday_stats" -
+    source_path:     e.g. "/Volumes/workspace/football_data_project/football_data"
+                      (Auto Loader reads recursively, so it picks up every
+                      YYYY/ season subdirectory automatically).
+    schema_location:  e.g. "/Volumes/workspace/football_data_project/_schemas/bronze_matchday_stats" -
                       Auto Loader persists/evolves the inferred schema here
                       across stream restarts; give each source its own path.
     """
@@ -96,11 +113,13 @@ def read_matchday_stream(spark, source_path, schema_location):
         .option("header", "true")
         .load(source_path)
     )
-    # The existing source may still hold legacy or per-fixture CSVs. Only
-    # ingest files from the current league/season/matchday layout.
+    # Only ingest matchday CSVs from the season subdirectories (YYYY/...).
+    # This excludes player_profiles.csv in the root and any stray files.
+    # The suffix after MATCHDAY_ can be numeric (01-38) or a named round
+    # like FINAL or RELEGATION_ROUND.
     return stream.filter(
         stream["_metadata.file_path"].rlike(
-            r"/league_\d+/season_\d+/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_[A-Z0-9_]+\.csv$"
+            r"/\d{4}/[A-Z]{3}_[A-Z0-9_]+_MATCHDAY_[A-Z0-9_]+\.csv$"
         )
     )
 
@@ -156,7 +175,9 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
 if __name__ == "__main__":
     # Paste-into-a-Databricks-notebook usage, mirroring the original
     # read-CSV-then-overwrite-table cell this replaces.
-    source_path = "/Volumes/workspace/football_data_project/football_data/"
+    # Auto Loader reads recursively from the volume root, picking up every
+    # YYYY/ season subdirectory.
+    source_path = "/Volumes/workspace/football_data_project/football_data"
     target_table = "workspace.football_data_project.bronze_matchday_stats"
     schema_location = "/Volumes/workspace/football_data_project/_schemas/bronze_matchday_stats"
     checkpoint_path = "/Volumes/workspace/football_data_project/_checkpoints/bronze_matchday_stats"

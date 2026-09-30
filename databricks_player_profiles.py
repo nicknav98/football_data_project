@@ -38,7 +38,7 @@ def write_player_profiles_stream(spark, source_path, schema_location,
         ))
         .option("cloudFiles.allowOverwrites", "true")
         .option("header", "true")
-        .load(f"{source_path.rstrip('/')}/reference/player_profiles")
+        .load(source_path.rstrip('/'))
     )
 
     def upsert_batch(batch, batch_id):
@@ -69,7 +69,7 @@ def write_player_profiles_stream(spark, source_path, schema_location,
 if __name__ == "__main__":
     query = write_player_profiles_stream(
         spark,
-        "/Volumes/workspace/football_data_project/football_data/",
+        "/Volumes/workspace/football_data_project/player_profiles_data",
         "/Volumes/workspace/football_data_project/_schemas/player_profiles",
         "/Volumes/workspace/football_data_project/_checkpoints/player_profiles",
         "workspace.football_data_project.bronze_player_profiles",
