@@ -110,3 +110,49 @@ LIMIT 20;
 The first query should return no rows. `silver_as_of` shows the latest silver
 processing time in each summary. It does not guarantee that every fixture in
 the source API has been ingested.
+
+### Scout API
+
+`scout_api.py` serves the gold summaries over HTTP. Run the updated gold SQL
+before starting it so `passes_with_accuracy` is available. It provides player
+name search, player season summaries, a metric leaderboard, a ranking metric
+list, and a scouting question endpoint. The question endpoint uses fixed
+read-only tools over the gold tables and returns the retrieved season rows
+alongside its answer. Model-generated SQL cannot run. Questions are
+independent; the service does not retain chat history. The data contains
+statistical indicators and has no written scout observations or transfer
+history.
+Rankings require at least the requested minutes of coverage for per 90 stats.
+Percentage rankings also require a minimum number of observed attempts or
+rated matches.
+
+Install `requirements.txt` and set these server-side environment variables:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABRICKS_SERVER_HOSTNAME` | Databricks workspace hostname |
+| `DATABRICKS_HTTP_PATH` | SQL warehouse HTTP path |
+| `DATABRICKS_TOKEN` | Token with read access to the gold views |
+| `OPENAI_API_KEY` | OpenAI API key |
+| `OPENAI_MODEL` | Model available to your OpenAI project |
+| `SCOUT_API_KEY` | Shared secret required by the question endpoint |
+
+Start the service with `uvicorn scout_api:app`. Its OpenAPI description is at
+`/docs`. Example requests:
+
+```bash
+curl 'http://localhost:8000/players?name=Haaland'
+curl 'http://localhost:8000/leaderboard?metric=goals_per_90&season=2025&min_minutes=900'
+curl -X POST 'http://localhost:8000/scout/ask' \
+  -H "X-Scout-API-Key: $SCOUT_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -d '{"question":"Compare the top scorers per 90 in the 2025 Premier League season."}'
+```
+
+Keep `SCOUT_API_KEY` on a trusted frontend server or API gateway, never in a
+public browser bundle. For public access, proxy question requests through that
+server and enforce user or IP rate limits and a spending budget at the gateway.
+The API limits query size and tool calls, but these limits do not replace a
+public traffic control layer. The Databricks identity needs `SELECT` on the
+two gold objects, access to their catalog and schema, and permission to use
+its SQL warehouse.

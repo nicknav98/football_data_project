@@ -153,6 +153,7 @@ SELECT
     s.red_cards,
     s.average_rating,
     s.matches_with_rating,
+    s.passes_with_accuracy,
     CASE WHEN s.passes_with_accuracy > 0
         THEN ROUND(s.weighted_pass_accuracy_points / s.passes_with_accuracy, 1)
     END AS pass_accuracy_pct,
