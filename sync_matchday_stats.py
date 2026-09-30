@@ -59,20 +59,36 @@ _last_request_time = 0.0
 
 
 def api_get(path, params=None, max_retries=3):
-    """GET with request pacing + 429 backoff, paced to the Pro plan's 300 req/min cap."""
+    """GET with pacing and bounded retries for transient API failures."""
     global _last_request_time
     for attempt in range(max_retries + 1):
         wait = MIN_INTERVAL - (time.monotonic() - _last_request_time)
         if wait > 0:
             time.sleep(wait)
 
-        r = http_session.get(f"{BASE_URL}{path}", params=params, timeout=30)
+        try:
+            r = http_session.get(f"{BASE_URL}{path}", params=params, timeout=(10, 30))
+        except (requests.exceptions.ConnectionError, requests.exceptions.Timeout) as exc:
+            _last_request_time = time.monotonic()
+            if attempt == max_retries:
+                raise
+            backoff = min(2 ** attempt, 30)
+            print(f"{path} connection failed ({type(exc).__name__}); retrying in {backoff}s")
+            time.sleep(backoff)
+            continue
         _last_request_time = time.monotonic()
 
-        if r.status_code == 429:
-            retry_after = int(r.headers.get("Retry-After", MIN_INTERVAL * 2))
-            print(f"429 rate limited, backing off {retry_after}s (attempt {attempt + 1}/{max_retries})")
-            time.sleep(retry_after)
+        if r.status_code == 429 or 500 <= r.status_code < 600:
+            if attempt == max_retries:
+                r.raise_for_status()
+            backoff = min(2 ** attempt, 30)
+            if r.status_code == 429:
+                try:
+                    backoff = max(backoff, float(r.headers.get("Retry-After", 0)))
+                except ValueError:
+                    pass
+            print(f"{path} returned HTTP {r.status_code}; retrying in {backoff:g}s")
+            time.sleep(backoff)
             continue
 
         r.raise_for_status()
@@ -80,8 +96,6 @@ def api_get(path, params=None, max_retries=3):
         if payload.get("errors"):
             raise ValueError(f"API-Football error on {path}: {payload['errors']}")
         return payload
-
-    r.raise_for_status()  # retries exhausted, surface the last error
 
 
 def get_fixtures(league_id, season):

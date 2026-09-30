@@ -41,3 +41,22 @@ objects are left in S3. The comparison app and Databricks reader use only the
 current nested matchday layout; run the sync to completion before relying on them.
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
+
+### Player profiles
+
+Run `python sync_player_profiles.py` to collect profiles for the same five
+leagues and three seasons. The script reads every paginated `/players` response
+and keeps one profile per player ID. A completed scan is cached for seven days
+in `state/player_profiles.json`; set `PLAYER_PROFILE_CACHE_HOURS=0` to force a
+new scan. Connection failures and HTTP 429 or 5xx responses are retried up to
+three times.
+
+The script uploads `reference/player_profiles/player_profiles.csv` under
+`AWS_S3_PREFIX`. Profiles include age, birth date, nationality, and
+`fetched_at`. Age is the value reported when the profile was fetched, not a
+historical age for `source_season`. Matchday statistics remain in their
+existing files and join to profiles by `player_id`.
+
+In Databricks, run `databricks_player_profiles.py` to upsert
+`bronze_player_profiles` by `player_id`. Use its own Auto Loader schema and
+checkpoint locations, separate from matchday statistics.
