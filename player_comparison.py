@@ -24,16 +24,16 @@ def configure_environment() -> tuple[str, str]:
     """Use shell variables first, then .env and .dotenv in the project root."""
     for filename in (".env", ".dotenv"):
         load_dotenv(ROOT / filename, override=False)
-    bucket = os.getenv("AWS_S3_BUCKET", "").strip()
+    bucket = os.getenv("AWS_S3_BUCKET", "football-data-project-nicknav98").strip()
     if not bucket:
         raise ValueError("Set AWS_S3_BUCKET in .env, .dotenv, or the shell.")
-    return bucket, os.getenv("AWS_S3_PREFIX", "").strip("/")
+    return bucket, os.getenv("AWS_S3_PREFIX", "football-matchday-stats").strip("/")
 
 
 def read_matchdays() -> tuple[pd.DataFrame, int]:
     """Read matchday CSVs under the configured S3 prefix, including paginated keys."""
     bucket, prefix = configure_environment()
-    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION")
+    region = os.getenv("AWS_REGION") or os.getenv("AWS_DEFAULT_REGION") or "eu-north-1"
     s3 = boto3.client("s3", region_name=region) if region else boto3.client("s3")
     listing_prefix = f"{prefix}/" if prefix else ""
     frames = []
