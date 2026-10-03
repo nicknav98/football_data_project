@@ -20,6 +20,10 @@ def fixture(league_id, fixture_id, round_number=1, season=2026):
     }
 
 
+def is_fixture_key(key):
+    return "/reference/fixtures/" in key
+
+
 def players(_fixture_id):
     return {
         "response": [{
@@ -56,7 +60,10 @@ class FixturePipelineTests(unittest.TestCase):
                     patch.object(sync, "upload_to_s3", side_effect=upload):
                 self.assertEqual(sync.sync_league_season(39, 2023, state, object()), 1)
 
-            self.assertEqual(uploaded, ["raw/league_39/season_2023/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv"])
+            self.assertEqual(uploaded, [
+                "raw/reference/fixtures/league_39_season_2023.csv",
+                "raw/league_39/season_2023/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv",
+            ])
             self.assertIn("39:2023:101", state)
             frame = pd.read_csv(output_dir / "league_39/season_2023/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv")
             self.assertEqual(tuple(frame.loc[0, ["league_id", "season", "fixture_id"]]), (39, 2023, 101))
@@ -87,12 +94,17 @@ class FixturePipelineTests(unittest.TestCase):
                 sync.main()
                 sync.main()
                 self.assertEqual(fetch.call_count, 6)
-                self.assertEqual(len(uploaded), 5)
+                self.assertEqual(len(uploaded), 10)
 
                 fixtures[39].append(fixture(39, 3902))
                 sync.main()
 
             self.assertEqual(fetch.call_count, 9)
+            # Unchanged fixture lists are not uploaded again.
+            fixture_keys = [key for key in uploaded if is_fixture_key(key)]
+            self.assertEqual(len(fixture_keys), 6)
+            self.assertEqual(fixture_keys.count("raw/reference/fixtures/league_39_season_2026.csv"), 2)
+            uploaded = [key for key in uploaded if not is_fixture_key(key)]
             self.assertEqual(len(uploaded), 6)
             self.assertEqual(uploaded[0], "raw/league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv")
             self.assertIn("raw/league_140/season_2026/ESP_LA_LIGA_MATCHDAY_01.csv", uploaded)
@@ -109,6 +121,56 @@ class FixturePipelineTests(unittest.TestCase):
                 self.assertTrue(frame["season"].eq(2026).all())
             premier = pd.read_csv(output_dir / "league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv")
             self.assertEqual(set(premier["fixture_id"]), {3900, 3901, 3902})
+
+    def test_fixture_list_keeps_match_context_for_played_and_unplayed_fixtures(self):
+        played = fixture(39, 101)
+        played["fixture"].update(referee="R", venue={"id": 5, "name": "Ground", "city": "Town"})
+        played.update(
+            teams={"home": {"id": 10, "name": "A"}, "away": {"id": 11, "name": "B"}},
+            goals={"home": 2, "away": 1},
+            score={"halftime": {"home": 1, "away": 0}},
+        )
+        unplayed = fixture(39, 102, round_number=2)
+        unplayed["fixture"]["status"] = {"short": "NS"}
+        unplayed.update(
+            teams={"home": {"id": 11, "name": "B"}, "away": {"id": 10, "name": "A"}},
+            goals={"home": None, "away": None},
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            uploaded = []
+
+            def upload(_s3, local_path, key):
+                uploaded.append(key)
+                return f"s3://bucket/{key}"
+
+            with patch.multiple(sync, OUTPUT_DIR=Path(tmp), AWS_S3_PREFIX=""), \
+                    patch.object(sync, "upload_to_s3", side_effect=upload):
+                self.assertTrue(sync.sync_fixtures(39, 2026, [unplayed, played], object()))
+                self.assertFalse(sync.sync_fixtures(39, 2026, [played, unplayed], object()))
+
+            self.assertEqual(uploaded, ["reference/fixtures/league_39_season_2026.csv"])
+            self.assertIsNone(comparison.MATCHDAY_KEY.search(uploaded[0]))
+            text = (Path(tmp) / uploaded[0]).read_text()
+            frame = pd.read_csv(Path(tmp) / uploaded[0])
+
+        self.assertEqual(list(frame), list(sync.FIXTURE_COLUMNS))
+        self.assertEqual(list(frame["fixture_id"]), [101, 102])
+        self.assertEqual(tuple(frame.loc[0, ["home_team_name", "away_team_name", "status"]]), ("A", "B", "FT"))
+        self.assertEqual(tuple(frame.loc[0, ["home_goals", "away_goals", "halftime_home_goals"]]), (2, 1, 1))
+        self.assertEqual(frame.loc[0, "kickoff_utc"], "2024-08-01T12:00:00+00:00")
+        self.assertTrue(pd.isna(frame.loc[1, "home_goals"]))
+        # Whole numbers stay whole next to blanks, so the bronze loader reads ints.
+        self.assertNotIn("2.0", text)
+
+    def test_failed_fixture_upload_is_retried_on_the_next_run(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.multiple(sync, OUTPUT_DIR=Path(tmp), AWS_S3_PREFIX=""), \
+                    patch.object(sync, "upload_to_s3", side_effect=[RuntimeError("s3 down"), "s3://bucket/key"]) as upload:
+                with self.assertRaises(RuntimeError):
+                    sync.sync_fixtures(39, 2026, [fixture(39, 101)], object())
+                self.assertTrue(sync.sync_fixtures(39, 2026, [fixture(39, 101)], object()))
+            self.assertEqual(upload.call_count, 2)
 
     def test_comparison_reads_only_nested_matchday_files(self):
         class S3:

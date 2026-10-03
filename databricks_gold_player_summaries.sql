@@ -1,30 +1,11 @@
-/* Run after all five silver tables and bronze_player_profiles exist.
-   The materialized view refreshes when a source table changes. */
+/* Run after silver_matchday_stats and bronze_player_profiles exist.
+   The materialized view refreshes when a source table changes.
+   Silver holds one row per league, season, fixture, team, and player. */
 CREATE OR REPLACE MATERIALIZED VIEW workspace.football_data_project.gold_player_season_summary
 TRIGGER ON UPDATE
 AS
-WITH all_matchdays AS (
-    SELECT * FROM workspace.football_data_project.silver_premier_league_matchday_stats
-    UNION ALL
-    SELECT * FROM workspace.football_data_project.silver_la_liga_matchday_stats
-    UNION ALL
-    SELECT * FROM workspace.football_data_project.silver_bundesliga_matchday_stats
-    UNION ALL
-    SELECT * FROM workspace.football_data_project.silver_serie_a_matchday_stats
-    UNION ALL
-    SELECT * FROM workspace.football_data_project.silver_ligue_1_matchday_stats
-),
-ranked_matchdays AS (
-    SELECT
-        *,
-        ROW_NUMBER() OVER (
-            PARTITION BY league_id, season, fixture_id, team_id, player_id
-            ORDER BY silver_processing_time DESC, ingestion_time DESC
-        ) AS row_rank
-    FROM all_matchdays
-),
-matchdays AS (
-    SELECT * FROM ranked_matchdays WHERE row_rank = 1
+WITH matchdays AS (
+    SELECT * FROM workspace.football_data_project.silver_matchday_stats
 ),
 position_minutes AS (
     SELECT
@@ -91,8 +72,31 @@ season_totals AS (
         CASE WHEN COUNT(goals_saves) > 0 THEN SUM(goals_saves) END AS saves,
         SUM(CASE WHEN goals_saves IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS saves_observed_minutes,
         CASE WHEN COUNT(goals_conceded) > 0 THEN SUM(goals_conceded) END AS goals_conceded,
+        /* Shots faced are saves plus goals conceded, counted for goalkeepers only. */
+        SUM(CASE WHEN games_position = 'G' AND goals_saves IS NOT NULL AND goals_conceded IS NOT NULL
+            THEN goals_saves + goals_conceded END) AS shots_faced_with_save_data,
+        SUM(CASE WHEN games_position = 'G' AND goals_saves IS NOT NULL AND goals_conceded IS NOT NULL
+            THEN goals_saves END) AS paired_saves,
         CASE WHEN COUNT(cards_yellow) > 0 THEN SUM(cards_yellow) END AS yellow_cards,
         CASE WHEN COUNT(cards_red) > 0 THEN SUM(cards_red) END AS red_cards,
+        CASE WHEN COUNT(offsides) > 0 THEN SUM(offsides) END AS offsides,
+        CASE WHEN COUNT(tackles_blocks) > 0 THEN SUM(tackles_blocks) END AS blocks,
+        SUM(CASE WHEN tackles_blocks IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS blocks_observed_minutes,
+        CASE WHEN COUNT(dribbles_past) > 0 THEN SUM(dribbles_past) END AS dribbled_past,
+        CASE WHEN COUNT(fouls_drawn) > 0 THEN SUM(fouls_drawn) END AS fouls_drawn,
+        SUM(CASE WHEN fouls_drawn IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS fouls_drawn_observed_minutes,
+        CASE WHEN COUNT(fouls_committed) > 0 THEN SUM(fouls_committed) END AS fouls_committed,
+        SUM(CASE WHEN fouls_committed IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS fouls_committed_observed_minutes,
+        CASE WHEN COUNT(penalty_won) > 0 THEN SUM(penalty_won) END AS penalties_won,
+        CASE WHEN COUNT(penalty_commited) > 0 THEN SUM(penalty_commited) END AS penalties_committed,
+        CASE WHEN COUNT(penalty_scored) > 0 THEN SUM(penalty_scored) END AS penalties_scored,
+        CASE WHEN COUNT(penalty_missed) > 0 THEN SUM(penalty_missed) END AS penalties_missed,
+        CASE WHEN COUNT(penalty_saved) > 0 THEN SUM(penalty_saved) END AS penalties_saved,
+        /* Non-penalty goals use only matches reporting both goals and penalties scored. */
+        SUM(CASE WHEN goals_total IS NOT NULL AND penalty_scored IS NOT NULL
+            THEN goals_total - penalty_scored END) AS non_penalty_goals,
+        SUM(CASE WHEN goals_total IS NOT NULL AND penalty_scored IS NOT NULL AND games_minutes >= 0
+            THEN games_minutes ELSE 0 END) AS non_penalty_goals_observed_minutes,
         ROUND(AVG(games_rating), 2) AS average_rating,
         COUNT(games_rating) AS matches_with_rating,
         SUM(CASE
@@ -149,8 +153,24 @@ SELECT
     s.saves,
     s.saves_observed_minutes,
     s.goals_conceded,
+    s.shots_faced_with_save_data,
     s.yellow_cards,
     s.red_cards,
+    s.offsides,
+    s.blocks,
+    s.blocks_observed_minutes,
+    s.dribbled_past,
+    s.fouls_drawn,
+    s.fouls_drawn_observed_minutes,
+    s.fouls_committed,
+    s.fouls_committed_observed_minutes,
+    s.penalties_won,
+    s.penalties_committed,
+    s.penalties_scored,
+    s.penalties_missed,
+    s.penalties_saved,
+    s.non_penalty_goals,
+    s.non_penalty_goals_observed_minutes,
     s.average_rating,
     s.matches_with_rating,
     s.passes_with_accuracy,
@@ -187,6 +207,21 @@ SELECT
     CASE WHEN s.saves_observed_minutes > 0
         THEN ROUND(90.0 * s.saves / s.saves_observed_minutes, 2)
     END AS saves_per_90,
+    CASE WHEN s.shots_faced_with_save_data > 0
+        THEN ROUND(100.0 * s.paired_saves / s.shots_faced_with_save_data, 1)
+    END AS save_pct,
+    CASE WHEN s.non_penalty_goals_observed_minutes > 0
+        THEN ROUND(90.0 * s.non_penalty_goals / s.non_penalty_goals_observed_minutes, 2)
+    END AS non_penalty_goals_per_90,
+    CASE WHEN s.blocks_observed_minutes > 0
+        THEN ROUND(90.0 * s.blocks / s.blocks_observed_minutes, 2)
+    END AS blocks_per_90,
+    CASE WHEN s.fouls_drawn_observed_minutes > 0
+        THEN ROUND(90.0 * s.fouls_drawn / s.fouls_drawn_observed_minutes, 2)
+    END AS fouls_drawn_per_90,
+    CASE WHEN s.fouls_committed_observed_minutes > 0
+        THEN ROUND(90.0 * s.fouls_committed / s.fouls_committed_observed_minutes, 2)
+    END AS fouls_committed_per_90,
     p.age AS profile_age,
     TRY_CAST(p.birth_date AS DATE) AS birth_date,
     p.nationality,
@@ -234,6 +269,17 @@ SELECT
     SUM(interceptions_observed_minutes) AS interceptions_observed_minutes,
     SUM(saves) AS saves,
     SUM(saves_observed_minutes) AS saves_observed_minutes,
+    SUM(non_penalty_goals) AS non_penalty_goals,
+    SUM(non_penalty_goals_observed_minutes) AS non_penalty_goals_observed_minutes,
+    SUM(penalties_scored) AS penalties_scored,
+    SUM(penalties_missed) AS penalties_missed,
+    SUM(fouls_drawn) AS fouls_drawn,
+    SUM(fouls_committed) AS fouls_committed,
+    SUM(yellow_cards) AS yellow_cards,
+    SUM(red_cards) AS red_cards,
+    CASE WHEN SUM(non_penalty_goals_observed_minutes) > 0
+        THEN ROUND(90.0 * SUM(non_penalty_goals) / SUM(non_penalty_goals_observed_minutes), 2)
+    END AS non_penalty_goals_per_90,
     CASE WHEN SUM(goals_observed_minutes) > 0
         THEN ROUND(90.0 * SUM(goals) / SUM(goals_observed_minutes), 2)
     END AS goals_per_90,

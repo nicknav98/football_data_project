@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync three seasons of matchday player stats for five European leagues."""
+"""Sync three seasons of matchday player stats and fixtures for five European leagues."""
 import json
 import os
 import re
@@ -27,6 +27,17 @@ LEAGUES = {
     135: ("ITA", "SERIE_A"),
     61: ("FRA", "LIGUE_1"),
 }
+FIXTURE_COLUMNS = (
+    "league_id", "season", "round", "fixture_id", "kickoff_utc", "status",
+    "referee", "venue_id", "venue_name", "venue_city",
+    "home_team_id", "home_team_name", "away_team_id", "away_team_name",
+    "home_goals", "away_goals", "halftime_home_goals", "halftime_away_goals",
+)
+# Nullable whole numbers; Int64 keeps "2" rather than "2.0" next to blanks.
+FIXTURE_INT_COLUMNS = (
+    "venue_id", "home_team_id", "away_team_id",
+    "home_goals", "away_goals", "halftime_home_goals", "halftime_away_goals",
+)
 
 
 def load_env(path=ROOT / ".env"):
@@ -145,6 +156,64 @@ def matchday_path(league_id, season, round_name):
     return f"league_{league_id}/season_{season}/{filename}"
 
 
+def fixtures_path(league_id, season):
+    return f"reference/fixtures/league_{league_id}_season_{season}.csv"
+
+
+def flatten_fixture(league_id, season, fixture):
+    """One row of match context per fixture, whether or not it has been played."""
+    info = fixture["fixture"]
+    venue = info.get("venue") or {}
+    teams = fixture.get("teams") or {}
+    home, away = teams.get("home") or {}, teams.get("away") or {}
+    goals = fixture.get("goals") or {}
+    halftime = (fixture.get("score") or {}).get("halftime") or {}
+    return {
+        "league_id": league_id,
+        "season": season,
+        "round": fixture["league"]["round"],
+        "fixture_id": info["id"],
+        "kickoff_utc": info.get("date"),
+        "status": (info.get("status") or {}).get("short"),
+        "referee": info.get("referee"),
+        "venue_id": venue.get("id"),
+        "venue_name": venue.get("name"),
+        "venue_city": venue.get("city"),
+        "home_team_id": home.get("id"),
+        "home_team_name": home.get("name"),
+        "away_team_id": away.get("id"),
+        "away_team_name": away.get("name"),
+        "home_goals": goals.get("home"),
+        "away_goals": goals.get("away"),
+        "halftime_home_goals": halftime.get("home"),
+        "halftime_away_goals": halftime.get("away"),
+    }
+
+
+def sync_fixtures(league_id, season, fixtures, s3):
+    """Upload the league-season fixture list when its content has changed."""
+    rows = [flatten_fixture(league_id, season, fixture) for fixture in fixtures]
+    df = pd.DataFrame(rows, columns=FIXTURE_COLUMNS).sort_values("fixture_id")
+    for column in FIXTURE_INT_COLUMNS:
+        df[column] = df[column].astype("Int64")
+    content = df.to_csv(index=False).encode("utf-8")
+
+    relative_path = fixtures_path(league_id, season)
+    local_path = OUTPUT_DIR / relative_path
+    if local_path.exists() and local_path.read_bytes() == content:
+        return False
+
+    # The local copy marks a completed upload, so it is replaced only afterwards.
+    local_path.parent.mkdir(parents=True, exist_ok=True)
+    pending = local_path.with_suffix(".tmp")
+    pending.write_bytes(content)
+    key = f"{AWS_S3_PREFIX}/{relative_path}" if AWS_S3_PREFIX else relative_path
+    upload_to_s3(s3, pending, key)
+    pending.replace(local_path)
+    print(f"  wrote {len(df)} fixtures to {local_path}")
+    return True
+
+
 def load_state():
     if STATE_PATH.exists():
         return json.loads(STATE_PATH.read_text())
@@ -202,6 +271,8 @@ def sync_league_season(league_id, season, state, s3):
             raise ValueError(f"Fixture {fixture['fixture']['id']} does not match league {league_id}, season {season}")
         if fixture["fixture"]["status"]["short"] in FINISHED_STATUSES:
             rounds[fixture["league"]["round"]].append(fixture)
+
+    sync_fixtures(league_id, season, fixtures, s3)
 
     paths = [matchday_path(league_id, season, round_name) for round_name in rounds]
     if len(paths) != len(set(paths)):
