@@ -99,12 +99,13 @@ season_totals AS (
             THEN games_minutes ELSE 0 END) AS non_penalty_goals_observed_minutes,
         ROUND(AVG(games_rating), 2) AS average_rating,
         COUNT(games_rating) AS matches_with_rating,
+        /* passes_accuracy is the number of accurate passes, not a percentage. */
         SUM(CASE
-            WHEN passes_total > 0 AND passes_accuracy BETWEEN 0 AND 100
-            THEN passes_total * passes_accuracy ELSE 0
-        END) AS weighted_pass_accuracy_points,
+            WHEN passes_total > 0 AND passes_accuracy BETWEEN 0 AND passes_total
+            THEN passes_accuracy ELSE 0
+        END) AS accurate_passes,
         SUM(CASE
-            WHEN passes_total > 0 AND passes_accuracy BETWEEN 0 AND 100
+            WHEN passes_total > 0 AND passes_accuracy BETWEEN 0 AND passes_total
             THEN passes_total ELSE 0
         END) AS passes_with_accuracy,
         MAX(silver_processing_time) AS silver_as_of
@@ -173,9 +174,10 @@ SELECT
     s.non_penalty_goals_observed_minutes,
     s.average_rating,
     s.matches_with_rating,
+    s.accurate_passes,
     s.passes_with_accuracy,
     CASE WHEN s.passes_with_accuracy > 0
-        THEN ROUND(s.weighted_pass_accuracy_points / s.passes_with_accuracy, 1)
+        THEN ROUND(100.0 * s.accurate_passes / s.passes_with_accuracy, 1)
     END AS pass_accuracy_pct,
     CASE WHEN s.shots_with_on_target_data > 0
         THEN ROUND(100.0 * s.paired_shots_on_target / s.shots_with_on_target_data, 1)
