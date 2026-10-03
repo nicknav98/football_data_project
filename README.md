@@ -42,6 +42,48 @@ current nested matchday layout; run the sync to completion before relying on the
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
 
+### Fixtures
+
+Each sync also writes the full fixture list for every league and season to
+`reference/fixtures/league_39_season_2026.csv` (and so on) under
+`AWS_S3_PREFIX`. It needs no extra API requests. Each row has the kickoff time
+in UTC, status, round, referee, venue, home and away teams, and the full-time
+and half-time score. Unplayed fixtures are included with blank scores. A file
+is uploaded again only when its content changes.
+
+In Databricks, copy these files into the `fixtures_data` volume and run
+`databricks_fixtures.py` to upsert `bronze_fixtures` by league, season, and
+fixture ID. Use its own Auto Loader schema and checkpoint locations. Matchday
+statistics join to fixtures on `league_id`, `season`, and `fixture_id`; a
+player's team is at home when `team_id` equals `home_team_id`.
+
+### Silver layer
+
+Run the silver notebook, `Silver Layer Matchday Stats By League.ipynb`, after
+each bronze load. It maintains one table for all five leagues,
+`silver_matchday_stats`, clustered by league and season. Each run merges only
+the bronze rows ingested since the previous run, so corrections update rows in
+place. Set `FULL_REFRESH = True` in the notebook to reprocess every bronze row,
+for example after changing a cleaning rule.
+
+Silver keeps one row per league, season, fixture, team, and player. Whole-number
+statistics are stored as integers. A value outside its valid range (a negative
+count, more than 130 minutes, a rating above 10, pass accuracy above 100) is
+replaced with null, and the row's `quality_issues` array records the rule, for
+example `games_rating_out_of_range`. A part that exceeds its whole, such as
+more shots on target than shots, is recorded in `quality_issues` but left as
+reported. The last notebook cell prints the count of each issue and fails if
+any key is duplicated.
+
+When `bronze_fixtures` exists, the notebook also maintains `silver_fixtures`
+with a typed `kickoff_utc`, `match_date`, `is_finished`, and `result` (`H`,
+`D`, or `A`).
+
+This layout replaces the five per-league tables named
+`silver_<league>_matchday_stats`. The first run builds `silver_matchday_stats`
+from all of bronze. Then run `databricks_gold_player_summaries.sql` again so
+gold reads the new table. After that the five old tables can be dropped.
+
 ### Player profiles
 
 Run `python sync_player_profiles.py` to collect profiles for the same five
@@ -63,27 +105,27 @@ checkpoint locations, separate from matchday statistics.
 
 ### Gold player summaries
 
-Run the silver notebook, `Silver Layer Matchday Stats By League.ipynb`, after
-the bronze matchday load. Run `databricks_player_profiles.py` so the profile
-table exists. Then execute `databricks_gold_player_summaries.sql` in a
+Run the silver notebook after the bronze matchday load. Run
+`databricks_player_profiles.py` so the profile table exists. Then execute `databricks_gold_player_summaries.sql` in a
 Databricks SQL editor using a Pro or Serverless SQL warehouse. Its first
 statement creates `gold_player_season_summary`, one row per player, league,
 and season. Its second creates `gold_player_observed_summary`, one row per
 player across only the league seasons present in the data.
 
-The gold materialized view uses `TRIGGER ON UPDATE` to refresh after any of
-the five silver tables or the profile table changes. The silver notebook
-currently overwrites whole league tables. A direct row stream from those
-tables would not safely carry corrections, so the gold layer uses triggered
-materialized view refreshes. Databricks may use a full refresh after an
-overwrite. This is a refreshable serving table, not an event stream. Run the
-silver notebook again before creating gold if its tables were built by an
-older notebook that replaced missing numeric values with zero.
+The gold materialized view uses `TRIGGER ON UPDATE` to refresh after the
+silver table or the profile table changes. The silver notebook merges changed
+rows and enables row tracking, so Databricks can refresh the view
+incrementally where the query allows it. This is a refreshable serving table,
+not an event stream.
 
-The season summary deduplicates on league, season, fixture, team, and player.
-It includes teams, appearances, starts, minutes, position, totals, per 90
-rates, shooting and duel percentages, pass accuracy weighted by attempts,
-and the latest available profile fields. Percentages use matches where both
+The season summary relies on silver holding one row per league, season,
+fixture, team, and player. It includes teams, appearances, starts, minutes,
+position, totals, per 90 rates, shooting and duel percentages, pass accuracy
+weighted by attempts, and the latest available profile fields. It also has
+offsides, blocks, times dribbled past, fouls drawn and committed, and
+penalties won, committed, scored, missed, and saved. `non_penalty_goals` uses
+only matches that report both goals and penalties scored. `save_pct` is saves
+divided by saves plus goals conceded, counted in matches played as goalkeeper. Percentages use matches where both
 parts of the ratio are present. Each per 90 rate uses minutes from matches
 where that stat is present. The corresponding `*_observed_minutes` and
 coverage columns show how much data supports a rate. An all missing stat
