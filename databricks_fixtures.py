@@ -76,7 +76,7 @@ def write_fixtures_stream(spark, source_path, schema_location,
 if __name__ == "__main__":
     query = write_fixtures_stream(
         spark,
-        "/Volumes/workspace/football_data_project/fixtures_data",
+        "/Volumes/workspace/football_data_project/football_data/fixtures",
         "/Volumes/workspace/football_data_project/_schemas/fixtures",
         "/Volumes/workspace/football_data_project/_checkpoints/fixtures",
         "workspace.football_data_project.bronze_fixtures",

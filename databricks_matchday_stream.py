@@ -12,7 +12,7 @@ The volume is organised into season subdirectories:
       ...
       2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
       ...
-      player_profiles.csv   (not season-specific, lives in root)
+      fixtures/league_39_season_2026.csv   (read by databricks_fixtures.py)
 
 This structure replaced the old flat layout where files from different seasons
 overwrote each other because the filenames lacked a year.  The S3 source
@@ -110,11 +110,14 @@ def read_matchday_stream(spark, source_path, schema_location):
         # Without this, Auto Loader ignores a file it has already seen even
         # if its content changed, and the correction would never arrive.
         .option("cloudFiles.allowOverwrites", "true")
+        # Matched against the file name before a file is read, so the fixture
+        # CSVs in the fixtures/ folder never reach schema inference.
+        .option("pathGlobFilter", "*_MATCHDAY_*.csv")
         .option("header", "true")
         .load(source_path)
     )
     # Only ingest matchday CSVs from the season subdirectories (YYYY/...).
-    # This excludes player_profiles.csv in the root and any stray files.
+    # This excludes any stray file whose name still passes pathGlobFilter.
     # The suffix after MATCHDAY_ can be numeric (01-38) or a named round
     # like FINAL or RELEGATION_ROUND.
     return stream.filter(
