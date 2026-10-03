@@ -6,12 +6,12 @@ sync_matchday_stats.py and sync_player_profiles.py upload to S3 with keys like:
   football-matchday-stats/reference/player_profiles/player_profiles.csv
 
 Each file goes to the volume its loader reads:
-  matchday files  -> football_data/<YYYY>/   (databricks_matchday_stream.py)
-  fixture files   -> fixtures_data/          (databricks_fixtures.py)
-  everything else -> player_profiles_data/   (databricks_player_profiles.py)
+  matchday files  -> football_data/<YYYY>/     (databricks_matchday_stream.py)
+  fixture files   -> football_data/fixtures/   (databricks_fixtures.py)
+  everything else -> player_profiles_data/     (databricks_player_profiles.py)
 
-Fixture and profile files stay out of football_data so they do not affect the
-matchday Auto Loader's schema inference.
+Fixture files share the football_data volume with matchday files. The matchday
+Auto Loader selects files by name, so it does not read the fixtures folder.
 
 S3 reports an ETag for every object, which changes when its content does. The
 ETag of each copied file is kept in a manifest, and a file is downloaded again
@@ -25,10 +25,10 @@ import re
 VOLUME_ROOT = "/Volumes/workspace/football_data_project"
 VOLUMES = {
     "matchdays": f"{VOLUME_ROOT}/football_data",
-    "fixtures": f"{VOLUME_ROOT}/fixtures_data",
+    "fixtures": f"{VOLUME_ROOT}/football_data/fixtures",
     "profiles": f"{VOLUME_ROOT}/player_profiles_data",
 }
-# Kept outside the three source volumes so no Auto Loader stream reads it.
+# Kept outside the source volumes so no Auto Loader stream reads it.
 MANIFEST_PATH = f"{VOLUME_ROOT}/_checkpoints/s3_volume_sync/copied_etags.json"
 SEASON = re.compile(r"season_(\d{4})")
 

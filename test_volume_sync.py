@@ -56,6 +56,15 @@ class VolumeSyncTests(unittest.TestCase):
         self.assertFalse((self.root / "matchdays/2026/league_39_season_2026.csv").exists())
         self.assertTrue((self.root / "profiles/player_profiles.csv").exists())
 
+    def test_default_volumes_keep_fixtures_in_their_own_folder(self):
+        root = volume_sync.VOLUME_ROOT
+        self.assertEqual(volume_sync.destination(MATCHDAY),
+                         f"{root}/football_data/2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv")
+        self.assertEqual(volume_sync.destination(FIXTURES),
+                         f"{root}/football_data/fixtures/league_39_season_2026.csv")
+        self.assertEqual(volume_sync.destination(PROFILES),
+                         f"{root}/player_profiles_data/player_profiles.csv")
+
     def test_second_run_downloads_only_changed_or_missing_files(self):
         self.sync()
         self.s3.downloads.clear()

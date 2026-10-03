@@ -46,7 +46,9 @@ checkpoint and schema location when switching an existing stream to this layout.
 
 Run `databricks_volume_sync.py` in Databricks before the bronze loaders. It
 copies matchday files to `football_data/<season>/`, fixture files to
-`fixtures_data/`, and the profile file to `player_profiles_data/`. It records
+`football_data/fixtures/`, and the profile file to `player_profiles_data/`.
+The matchday Auto Loader reads only files named `*_MATCHDAY_*.csv`, so it
+ignores the fixtures folder. It records
 the S3 ETag of each copied file in
 `_checkpoints/s3_volume_sync/copied_etags.json` and downloads a file again
 only when its ETag has changed or its copy is missing. The first run copies
@@ -62,7 +64,7 @@ and half-time score. Unplayed fixtures are included with blank scores. A file
 is uploaded again only when its content changes.
 
 In Databricks, run `databricks_volume_sync.py` to copy these files into the
-`fixtures_data` volume, then run `databricks_fixtures.py` to upsert
+`fixtures` folder of the `football_data` volume, then run `databricks_fixtures.py` to upsert
 `bronze_fixtures` by league, season, and fixture ID. Use its own Auto Loader schema and checkpoint locations. Matchday
 statistics join to fixtures on `league_id`, `season`, and `fixture_id`; a
 player's team is at home when `team_id` equals `home_team_id`.
