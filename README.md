@@ -16,8 +16,10 @@ python -m streamlit run compare_players_app.py
 
 Use the sidebar to filter leagues, seasons, teams, and matchdays. Select up to ten
 players and the stat columns to compare. Counting stats can be shown as totals
-or per 90 minutes. Rating is averaged across matches; pass accuracy is weighted
-by passes attempted where available. The comparison can be downloaded as CSV.
+or per 90 minutes. Rating is averaged across matches. Pass accuracy is accurate
+passes as a percentage of passes attempted; API-Football's `passes_accuracy`
+field is a count of accurate passes, not a percentage. The comparison can be
+downloaded as CSV.
 
 ### Five league matchday sync
 
@@ -80,10 +82,10 @@ for example after changing a cleaning rule.
 
 Silver keeps one row per league, season, fixture, team, and player. Whole-number
 statistics are stored as integers. A value outside its valid range (a negative
-count, more than 130 minutes, a rating above 10, pass accuracy above 100) is
-replaced with null, and the row's `quality_issues` array records the rule, for
-example `games_rating_out_of_range`. A part that exceeds its whole, such as
-more shots on target than shots, is recorded in `quality_issues` but left as
+count, more than 130 minutes, a rating above 10) is replaced with null, and
+the row's `quality_issues` array records the rule, for example
+`games_rating_out_of_range`. A part that exceeds its whole, such as more shots
+on target than shots or more accurate passes than passes, is recorded in `quality_issues` but left as
 reported. The last notebook cell prints the count of each issue and fails if
 any key is duplicated.
 
@@ -133,7 +135,8 @@ not an event stream.
 The season summary relies on silver holding one row per league, season,
 fixture, team, and player. It includes teams, appearances, starts, minutes,
 position, totals, per 90 rates, shooting and duel percentages, pass accuracy
-weighted by attempts, and the latest available profile fields. It also has
+(`accurate_passes` over `passes_with_accuracy`, counting matches that report
+both), and the latest available profile fields. It also has
 offsides, blocks, times dribbled past, fouls drawn and committed, and
 penalties won, committed, scored, missed, and saved. `non_penalty_goals` uses
 only matches that report both goals and penalties scored. `save_pct` is saves

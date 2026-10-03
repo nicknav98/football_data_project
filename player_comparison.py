@@ -93,10 +93,11 @@ def compare_players(
             values = pd.to_numeric(player[metric], errors="coerce")
             if metric == "games_rating":
                 row[metric] = values.mean()
-            elif metric == "passes_accuracy" and "passes_total" in player:
-                weights = pd.to_numeric(player["passes_total"], errors="coerce").fillna(0)
-                valid = values.notna() & (weights > 0)
-                row[metric] = (values[valid] * weights[valid]).sum() / weights[valid].sum() if valid.any() else values.mean()
+            elif metric == "passes_accuracy":
+                # passes_accuracy counts accurate passes; the percentage is accurate over attempted.
+                attempted = pd.to_numeric(player.get("passes_total", pd.Series(dtype=float)), errors="coerce")
+                valid = values.notna() & (attempted > 0) & (values <= attempted)
+                row[metric] = 100 * values[valid].sum() / attempted[valid].sum() if valid.any() else float("nan")
             elif metric in AVERAGE_METRICS:
                 row[metric] = values.mean()
             else:

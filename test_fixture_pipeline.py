@@ -196,6 +196,17 @@ class FixturePipelineTests(unittest.TestCase):
         self.assertEqual(len(frame), 1)
         self.assertEqual(frame.loc[0, "fixture_id"], 101)
 
+    def test_pass_accuracy_is_accurate_passes_over_attempts(self):
+        frame = pd.DataFrame({
+            "player_id": [20, 20, 20],
+            "games_minutes": [90, 90, 90],
+            "passes_total": [120, 40, 50],
+            # A count, so a busy match exceeds 100; the last match reports no accuracy.
+            "passes_accuracy": [110, 30, None],
+        })
+        summary = comparison.compare_players(frame, [20], ["passes_accuracy"], False)
+        self.assertAlmostEqual(summary.loc[20, "passes_accuracy"], 100 * 140 / 160)
+
     def test_same_player_and_fixture_id_remain_distinct_across_seasons_and_teams(self):
         class S3:
             def get_paginator(self, _name):
