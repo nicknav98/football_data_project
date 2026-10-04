@@ -1,0 +1,67 @@
+# Databricks Asset Bundle for the football data pipeline.
+#
+#   databricks bundle validate            check the configuration
+#   databricks bundle deploy              deploy to dev (the default target)
+#   databricks bundle deploy -t prod      deploy to prod
+#   databricks bundle run matchday_ingest run the deployed job
+bundle:
+  name: football_data_project
+
+include:
+  - resources/*.yml
+
+variables:
+  catalog:
+    description: Unity Catalog catalog that holds the pipeline's schema.
+    default: workspace
+  schema:
+    description: Schema that holds the pipeline's tables and volumes.
+    default: football_data_project
+
+targets:
+  # Deploys a copy of the job named "[dev <user>] MatchDay Ingest" with its
+  # schedule paused. It reads and writes a scratch schema that the bundle
+  # creates, so it never touches the production tables.
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-9b6b9cf8-eff9.cloud.databricks.com
+    variables:
+      # Development mode prefixes the schema declared below with this.
+      schema: dev_${workspace.current_user.short_name}_football_data_project
+    resources:
+      schemas:
+        pipeline:
+          catalog_name: ${var.catalog}
+          name: football_data_project
+          comment: Scratch copy of the football data pipeline for development.
+      volumes:
+        football_data:
+          catalog_name: ${var.catalog}
+          schema_name: ${resources.schemas.pipeline.name}
+          name: football_data
+          volume_type: MANAGED
+        player_profiles_data:
+          catalog_name: ${var.catalog}
+          schema_name: ${resources.schemas.pipeline.name}
+          name: player_profiles_data
+          volume_type: MANAGED
+        checkpoints:
+          catalog_name: ${var.catalog}
+          schema_name: ${resources.schemas.pipeline.name}
+          name: _checkpoints
+          volume_type: MANAGED
+        schemas:
+          catalog_name: ${var.catalog}
+          schema_name: ${resources.schemas.pipeline.name}
+          name: _schemas
+          volume_type: MANAGED
+
+  # Uses the existing workspace.football_data_project schema and its volumes,
+  # which the bundle does not manage.
+  prod:
+    mode: production
+    workspace:
+      host: https://dbc-9b6b9cf8-eff9.cloud.databricks.com
+      root_path: /Workspace/Users/nicholas.navarro@knowit.fi/.bundle/${bundle.name}/${bundle.target}

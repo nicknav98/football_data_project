@@ -23,13 +23,20 @@ import os
 import re
 
 VOLUME_ROOT = "/Volumes/workspace/football_data_project"
-VOLUMES = {
-    "matchdays": f"{VOLUME_ROOT}/football_data",
-    "fixtures": f"{VOLUME_ROOT}/football_data/fixtures",
-    "profiles": f"{VOLUME_ROOT}/player_profiles_data",
-}
-# Kept outside the source volumes so no Auto Loader stream reads it.
-MANIFEST_PATH = f"{VOLUME_ROOT}/_checkpoints/s3_volume_sync/copied_etags.json"
+
+
+def volume_paths(root):
+    """Destination volumes and manifest path under a schema's volume root."""
+    volumes = {
+        "matchdays": f"{root}/football_data",
+        "fixtures": f"{root}/football_data/fixtures",
+        "profiles": f"{root}/player_profiles_data",
+    }
+    # Kept outside the source volumes so no Auto Loader stream reads it.
+    return volumes, f"{root}/_checkpoints/s3_volume_sync/copied_etags.json"
+
+
+VOLUMES, MANIFEST_PATH = volume_paths(VOLUME_ROOT)
 SEASON = re.compile(r"season_(\d{4})")
 
 
@@ -79,7 +86,17 @@ def sync_s3_to_volumes(s3, bucket, prefix, volumes=VOLUMES, manifest_path=MANIFE
 
 
 if __name__ == "__main__":
+    import argparse
+
     import boto3
+
+    # The job passes --catalog and --schema; the defaults are the production schema.
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", default="workspace")
+    parser.add_argument("--schema", default="football_data_project")
+    args, _ = parser.parse_known_args()
+    volume_root = f"/Volumes/{args.catalog}/{args.schema}"
+    volumes, manifest_path = volume_paths(volume_root)
 
     scope_name = "football-project-keys"
     s3_client = boto3.client(
@@ -90,8 +107,8 @@ if __name__ == "__main__":
     bucket_name = "football-data-project-nicknav98"
     s3_prefix = "football-matchday-stats/"
 
-    print(f"Syncing s3://{bucket_name}/{s3_prefix} into {VOLUME_ROOT}...")
-    downloaded, skipped = sync_s3_to_volumes(s3_client, bucket_name, s3_prefix)
+    print(f"Syncing s3://{bucket_name}/{s3_prefix} into {volume_root}...")
+    downloaded, skipped = sync_s3_to_volumes(s3_client, bucket_name, s3_prefix, volumes, manifest_path)
     for key in downloaded:
-        print(f"  downloaded {key} -> {destination(key)}")
+        print(f"  downloaded {key} -> {destination(key, volumes)}")
     print(f"\n{len(downloaded)} files downloaded, {skipped} unchanged files skipped.")

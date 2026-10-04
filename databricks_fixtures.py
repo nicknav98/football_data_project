@@ -74,11 +74,20 @@ def write_fixtures_stream(spark, source_path, schema_location,
 
 
 if __name__ == "__main__":
+    import argparse
+
+    # The job passes --catalog and --schema; the defaults are the production schema.
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", default="workspace")
+    parser.add_argument("--schema", default="football_data_project")
+    args, _ = parser.parse_known_args()
+    volumes = f"/Volumes/{args.catalog}/{args.schema}"
+
     query = write_fixtures_stream(
         spark,
-        "/Volumes/workspace/football_data_project/football_data/fixtures",
-        "/Volumes/workspace/football_data_project/_schemas/fixtures",
-        "/Volumes/workspace/football_data_project/_checkpoints/fixtures",
-        "workspace.football_data_project.bronze_fixtures",
+        f"{volumes}/football_data/fixtures",
+        f"{volumes}/_schemas/fixtures",
+        f"{volumes}/_checkpoints/fixtures",
+        f"{args.catalog}.{args.schema}.bronze_fixtures",
     )
     query.awaitTermination()

@@ -44,6 +44,37 @@ current nested matchday layout; run the sync to completion before relying on the
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
 
+### Deploying the Databricks job
+
+`databricks.yml` and `resources/matchday_ingest.job.yml` define the MatchDay
+Ingest job as a Databricks Asset Bundle. Deploying uploads the scripts and the
+silver notebook and creates or updates the job, so the job always runs the
+code in the deployed commit.
+
+```bash
+databricks bundle validate
+databricks bundle deploy            # dev, the default target
+databricks bundle run matchday_ingest
+databricks bundle deploy -t prod
+```
+
+The job copies S3 files into the volumes, then loads player profiles,
+fixtures, and matchday stats independently, then runs the silver notebook.
+Each task receives the catalog and schema as parameters.
+
+| Target | Job name | Schema | Schedule |
+| --- | --- | --- | --- |
+| `dev` | `[dev <user>] MatchDay Ingest` | `dev_<user>_football_data_project`, created by the bundle with its four volumes | Paused |
+| `prod` | `MatchDay Ingest` | `football_data_project`, existing and not managed by the bundle | Daily |
+
+The first `prod` deploy creates a new job beside any job made by hand in the
+UI. To have the bundle take over an existing job instead, run
+`databricks bundle deployment bind matchday_ingest <job id> -t prod` before
+deploying. To reprocess all of bronze into silver, run the job with the
+`silver` task's `full_refresh` parameter set to `true`.
+`databricks_gold_player_summaries.sql` is not part of the bundle and names the
+production schema directly.
+
 ### Copying S3 files into Databricks volumes
 
 Run `databricks_volume_sync.py` in Databricks before the bronze loaders. It
@@ -77,8 +108,9 @@ Run the silver notebook, `Silver Layer Matchday Stats By League.ipynb`, after
 each bronze load. It maintains one table for all five leagues,
 `silver_matchday_stats`, clustered by league and season. Each run merges only
 the bronze rows ingested since the previous run, so corrections update rows in
-place. Set `FULL_REFRESH = True` in the notebook to reprocess every bronze row,
-for example after changing a cleaning rule.
+place. Set the notebook's `full_refresh` parameter to `true` to reprocess every
+bronze row, for example after changing a cleaning rule. Its `catalog` and
+`schema` parameters select the schema to read and write.
 
 Silver keeps one row per league, season, fixture, team, and player. Whole-number
 statistics are stored as integers. A value outside its valid range (a negative

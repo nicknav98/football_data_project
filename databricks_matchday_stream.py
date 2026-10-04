@@ -180,10 +180,19 @@ if __name__ == "__main__":
     # read-CSV-then-overwrite-table cell this replaces.
     # Auto Loader reads recursively from the volume root, picking up every
     # YYYY/ season subdirectory.
-    source_path = "/Volumes/workspace/football_data_project/football_data"
-    target_table = "workspace.football_data_project.bronze_matchday_stats"
-    schema_location = "/Volumes/workspace/football_data_project/_schemas/bronze_matchday_stats"
-    checkpoint_path = "/Volumes/workspace/football_data_project/_checkpoints/bronze_matchday_stats"
+    import argparse
+
+    # The job passes --catalog and --schema; the defaults are the production schema.
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--catalog", default="workspace")
+    parser.add_argument("--schema", default="football_data_project")
+    args, _ = parser.parse_known_args()
+    volumes = f"/Volumes/{args.catalog}/{args.schema}"
+
+    source_path = f"{volumes}/football_data"
+    target_table = f"{args.catalog}.{args.schema}.bronze_matchday_stats"
+    schema_location = f"{volumes}/_schemas/bronze_matchday_stats"
+    checkpoint_path = f"{volumes}/_checkpoints/bronze_matchday_stats"
 
     query = write_bronze_stream(spark, source_path, schema_location, checkpoint_path, target_table)
     query.awaitTermination()
