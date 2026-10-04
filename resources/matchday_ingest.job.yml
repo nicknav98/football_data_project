@@ -1,0 +1,66 @@
+resources:
+  jobs:
+    matchday_ingest:
+      name: MatchDay Ingest
+      max_concurrent_runs: 1
+      performance_target: PERFORMANCE_OPTIMIZED
+      queue:
+        enabled: true
+      # No pause_status here: the dev target then deploys the schedule paused,
+      # and prod deploys it running.
+      trigger:
+        periodic:
+          interval: 1
+          unit: DAYS
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+
+      tasks:
+        - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_volume_sync.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.schema}"]
+
+        # The three bronze loads are independent, so one failing does not
+        # block the others.
+        - task_key: ingest_player_profiles
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_player_profiles.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.schema}"]
+
+        - task_key: ingest_fixtures
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_fixtures.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.schema}"]
+
+        - task_key: ingest_matchday_stats
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_matchday_stream.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.schema}"]
+
+        # Runs once both loads have finished, even if the fixtures load
+        # failed: the notebook skips fixtures when bronze_fixtures is missing.
+        - task_key: silver
+          depends_on:
+            - task_key: ingest_matchday_stats
+            - task_key: ingest_fixtures
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../Silver Layer Matchday Stats By League.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              full_refresh: "false"
