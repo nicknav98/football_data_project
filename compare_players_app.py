@@ -76,5 +76,5 @@ summary.index = [labels[int(pid)] for pid in summary.index]
 display = summary.T
 display.index = [f"{metric} (average)" if metric in AVERAGE_METRICS else f"{metric} / 90" if per_90 and metric not in {"matches", "minutes"} else metric for metric in display.index]
 st.dataframe(display.style.format(precision=2, na_rep="N/A"), use_container_width=True)
-st.caption("Matches and minutes are totals. Rating is the mean of available match ratings. Pass accuracy is weighted by passes attempted when available. Missing stats are excluded from averages; per-90 values need minutes played.")
+st.caption("Matches and minutes are totals. Rating is the mean of available match ratings. Pass accuracy is accurate passes as a percentage of passes attempted. Missing stats are excluded from averages; per-90 values need minutes played.")
 st.download_button("Download comparison CSV", display.to_csv().encode("utf-8"), "player_comparison.csv", "text/csv")

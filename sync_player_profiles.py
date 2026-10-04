@@ -17,6 +17,9 @@ PROFILE_COLUMNS = (
     "birth_place", "birth_country", "nationality", "height", "weight",
     "injured", "photo", "source_league_id", "source_season", "fetched_at",
 )
+# Nullable whole numbers; Int64 keeps "30" rather than "30.0" next to blanks,
+# which the bronze loader's integer columns would otherwise read as null.
+PROFILE_INT_COLUMNS = ("player_id", "age", "source_league_id", "source_season")
 
 
 def fetch_profiles(api_get=matchdays.api_get):
@@ -93,7 +96,10 @@ def load_or_fetch_profiles(fetch=fetch_profiles):
 
 def write_snapshot(s3, rows):
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(rows, columns=PROFILE_COLUMNS).to_csv(OUTPUT_PATH, index=False)
+    frame = pd.DataFrame(rows, columns=PROFILE_COLUMNS)
+    for column in PROFILE_INT_COLUMNS:
+        frame[column] = frame[column].astype("Int64")
+    frame.to_csv(OUTPUT_PATH, index=False)
     relative_key = "reference/player_profiles/player_profiles.csv"
     key = f"{matchdays.AWS_S3_PREFIX}/{relative_key}" if matchdays.AWS_S3_PREFIX else relative_key
     matchdays.upload_to_s3(s3, OUTPUT_PATH, key)
