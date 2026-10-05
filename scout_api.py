@@ -4,10 +4,12 @@ from __future__ import annotations
 
 from functools import lru_cache
 import os
+from pathlib import Path
 import secrets
 from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
 from scout_backend import (
@@ -15,6 +17,9 @@ from scout_backend import (
     ScoutAssistant, ShortlistArgs,
 )
 
+
+# Shared by the API and Streamlit chat; deployed environment variables take precedence.
+load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
 
 app = FastAPI(title="Football scout API", version="1.0.0")
 

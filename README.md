@@ -215,6 +215,10 @@ Install `requirements.txt` and set these server-side environment variables:
 | `OPENAI_MODEL` | Model available to your OpenAI project |
 | `SCOUT_API_KEY` | Shared secret required by the question endpoint |
 
+The API and Streamlit chat automatically load `.env` beside `scout_api.py`.
+Variables already set in the process environment take precedence. Restart the
+running service after changing configuration.
+
 Start the service with `uvicorn scout_api:app`. Its OpenAPI description is at
 `/docs`. Example requests:
 

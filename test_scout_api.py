@@ -1,6 +1,10 @@
 """HTTP contract checks without Databricks or OpenAI credentials."""
 
 import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -37,6 +41,55 @@ class ScoutApiTests(unittest.TestCase):
 
     def tearDown(self):
         scout_api.app.dependency_overrides.clear()
+
+    def test_project_env_loads_outside_project_and_preserves_process_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            project = root / "project"
+            launch = root / "launch"
+            project.mkdir()
+            launch.mkdir()
+            (project / "scout_api.py").write_text(Path(scout_api.__file__).read_text())
+            settings = {
+                "OPENAI_MODEL": "file-model",
+                "OPENAI_API_KEY": "file-key",
+                "DATABRICKS_SERVER_HOSTNAME": "fixture.cloud.databricks.com",
+                "DATABRICKS_HTTP_PATH": "/sql/1.0/warehouses/fixture",
+                "DATABRICKS_TOKEN": "file-token",
+            }
+            (project / ".env").write_text("\n".join(
+                f"{key}={value}" for key, value in settings.items()))
+            (launch / ".env").write_text("OPENAI_API_KEY=wrong-directory-key\n")
+            script = """
+import os
+import sys
+from unittest.mock import patch
+sys.path[:0] = [sys.argv[1], sys.argv[2]]
+import scout_api
+assert os.environ['OPENAI_MODEL'] == sys.argv[3]
+assert os.environ['OPENAI_API_KEY'] == 'file-key'
+assert os.environ['DATABRICKS_SERVER_HOSTNAME'] == 'fixture.cloud.databricks.com'
+assert os.environ['DATABRICKS_HTTP_PATH'] == '/sql/1.0/warehouses/fixture'
+assert os.environ['DATABRICKS_TOKEN'] == 'file-token'
+with patch('openai.OpenAI'):
+    assert scout_api.assistant().model == sys.argv[3]
+"""
+            for process_model in (None, "process-model"):
+                with self.subTest(process_model=process_model):
+                    environment = os.environ.copy()
+                    for key in settings:
+                        environment.pop(key, None)
+                    environment.pop("PYTHON_DOTENV_DISABLED", None)
+                    if process_model:
+                        environment["OPENAI_MODEL"] = process_model
+                    result = subprocess.run(
+                        [sys.executable, "-c", script, str(project),
+                         str(Path(scout_api.__file__).resolve().parent),
+                         process_model or "file-model"],
+                        cwd=launch, env=environment, capture_output=True, text=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_public_data_routes_and_validation(self):
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
