@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+from time import perf_counter
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -19,6 +20,7 @@ LOGGER = logging.getLogger(__name__)
 MAX_TOOL_CALLS = 6
 MODEL_OUTPUT_TOKENS = 4096
 MODEL_RETRY_OUTPUT_TOKENS = 8192
+MODEL_REQUEST_TIMEOUT_SECONDS = 120
 
 SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
     primary_position, team_names, matches_in_data, appearances, starts,
@@ -350,19 +352,34 @@ class ScoutAssistant:
         self.model = model
 
     def _response(self, history: list[Any], call_count: int) -> Any:
+        from openai import APITimeoutError
+
         tool_choice = "required" if call_count == 0 else (
             "none" if call_count == MAX_TOOL_CALLS else "auto"
         )
         for budget in (MODEL_OUTPUT_TOKENS, MODEL_RETRY_OUTPUT_TOKENS):
-            response = self.client.responses.create(
-                model=self.model,
-                instructions=INSTRUCTIONS,
-                input=history,
-                tools=TOOLS,
-                tool_choice=tool_choice,
-                store=False,
-                max_output_tokens=budget,
-            )
+            options: dict[str, Any] = {}
+            # Original GPT-5 models default to medium reasoning. These known
+            # aliases and dated snapshots support low effort for interactive chat.
+            if re.fullmatch(r"gpt-5(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?", self.model):
+                options["reasoning"] = {"effort": "low"}
+            started = perf_counter()
+            try:
+                response = self.client.responses.create(
+                    model=self.model,
+                    instructions=INSTRUCTIONS,
+                    input=history,
+                    tools=TOOLS,
+                    tool_choice=tool_choice,
+                    store=False,
+                    max_output_tokens=budget,
+                    **options,
+                )
+            except APITimeoutError as exc:
+                LOGGER.warning("Scout OpenAI request timed out: model=%s elapsed=%.1fs lookups=%s",
+                               self.model, perf_counter() - started, call_count)
+                raise RuntimeError("OpenAI model request timed out. Try again or request "
+                                   "a shorter comparison.") from exc
             status = getattr(response, "status", "completed")
             details = getattr(response, "incomplete_details", None)
             reason = getattr(details, "reason", None)
@@ -377,6 +394,8 @@ class ScoutAssistant:
             if status != "completed":
                 raise RuntimeError(f"Scouting model response was not completed ({reason or status}). "
                                    "Try rephrasing the question.")
+            LOGGER.info("Scout OpenAI response completed: model=%s elapsed=%.1fs lookups=%s",
+                        self.model, perf_counter() - started, call_count)
             return response
 
     def ask(self, question: str, previous: list[dict[str, str]] | None = None) -> dict[str, Any]:

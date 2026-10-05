@@ -8,12 +8,13 @@ from pathlib import Path
 import secrets
 from typing import Literal
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
 from scout_backend import (
-    GoldRepository, LeaderboardArgs, RANK_METRICS, ROLE_PROFILES,
+    GoldRepository, LeaderboardArgs, MODEL_REQUEST_TIMEOUT_SECONDS, RANK_METRICS, ROLE_PROFILES,
     ScoutAssistant, ShortlistArgs,
 )
 
@@ -54,7 +55,9 @@ def assistant() -> ScoutAssistant:
     model = os.getenv("OPENAI_MODEL")
     if not model or not os.getenv("OPENAI_API_KEY"):
         raise RuntimeError("Set OPENAI_MODEL and OPENAI_API_KEY")
-    return ScoutAssistant(repository(), OpenAI(timeout=30, max_retries=1), model)
+    client = OpenAI(timeout=httpx.Timeout(MODEL_REQUEST_TIMEOUT_SECONDS, connect=10),
+                    max_retries=0)
+    return ScoutAssistant(repository(), client, model)
 
 
 def require_scout_key(x_scout_api_key: str | None = Header(default=None)) -> None:

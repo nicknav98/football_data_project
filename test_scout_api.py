@@ -42,6 +42,17 @@ class ScoutApiTests(unittest.TestCase):
     def tearDown(self):
         scout_api.app.dependency_overrides.clear()
 
+    def test_assistant_uses_longer_read_timeout_without_automatic_retries(self):
+        scout_api.assistant.cache_clear()
+        self.addCleanup(scout_api.assistant.cache_clear)
+        with patch.dict(os.environ, {"OPENAI_MODEL": "gpt-5-nano", "OPENAI_API_KEY": "fixture-key"}), \
+                patch("openai.OpenAI") as client:
+            self.assertEqual(scout_api.assistant().model, "gpt-5-nano")
+        options = client.call_args.kwargs
+        self.assertEqual(options["timeout"].read, 120)
+        self.assertEqual(options["timeout"].connect, 10)
+        self.assertEqual(options["max_retries"], 0)
+
     def test_project_env_loads_outside_project_and_preserves_process_settings(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

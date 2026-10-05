@@ -7,6 +7,9 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
 
+import httpx
+from openai import OpenAI
+
 from scout_backend import (
     GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
     MODEL_RETRY_OUTPUT_TOKENS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
@@ -212,6 +215,34 @@ class AssistantTests(unittest.TestCase):
         self.assertFalse(responses.requests[0]["store"])
         self.assertEqual(responses.requests[0]["max_output_tokens"], MODEL_OUTPUT_TOKENS)
         self.assertEqual(responses.requests[1]["tool_choice"], "auto")
+
+    def test_low_reasoning_is_sent_only_to_supported_original_gpt5_models(self):
+        for model_name, expected in (("gpt-5-nano", {"effort": "low"}),
+                                     ("gpt-5-nano-2025-08-07", {"effort": "low"}),
+                                     ("gpt-4.1", None), ("gpt-5-pro", None)):
+            with self.subTest(model=model_name):
+                assistant, model = self.scripted_assistant(function_response(), text_response())
+                assistant.model = model_name
+                self.assertTrue(assistant.ask("How did player 10 score?")["answer"])
+                for request in model.requests:
+                    self.assertEqual(request.get("reasoning"), expected)
+
+    def test_openai_read_timeout_is_identified_without_repeating_the_request(self):
+        requests = []
+        def timed_out(request):
+            requests.append(request)
+            raise httpx.ReadTimeout("Synthetic timeout", request=request)
+
+        # Use the real SDK against a local mock transport. No network or keys.
+        with httpx.Client(transport=httpx.MockTransport(timed_out)) as transport:
+            client = OpenAI(api_key="fixture-key", http_client=transport,
+                            timeout=120, max_retries=0)
+            assistant = ScoutAssistant(Mock(), client, "gpt-5-nano")
+            with self.assertLogs("scout_backend", level="WARNING") as logs:
+                with self.assertRaisesRegex(RuntimeError, "OpenAI model request timed out"):
+                    assistant.ask("How did player 10 score?")
+            self.assertEqual(len(requests), 1)
+            self.assertIn("Scout OpenAI request timed out", logs.output[0])
 
     def test_initial_truncation_retries_before_declaring_no_data(self):
         assistant, model = self.scripted_assistant(

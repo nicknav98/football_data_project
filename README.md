@@ -230,6 +230,12 @@ tool calls are executed. Further truncation produces a token-limit error,
 not a claim that player data is missing. Truncation warnings appear in the
 application logs.
 
+The original GPT-5, GPT-5 mini, and GPT-5 nano aliases and dated snapshots use
+low reasoning effort for interactive chat. Model requests allow up to 120
+seconds of network inactivity, with a 10-second connection timeout. Automatic
+SDK retries are disabled so a timeout does not silently repeat a long request.
+Timeout messages and warnings identify OpenAI as the failing stage.
+
 Start the service with `uvicorn scout_api:app`. Its OpenAPI description is at
 `/docs`. Example requests:
 
