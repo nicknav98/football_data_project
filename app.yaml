@@ -1,6 +1,6 @@
 command:
   - streamlit
   - run
-  - compare_players_app.py
+  - scout_chat_app.py
   - --server.port
   - "8000"

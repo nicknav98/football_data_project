@@ -4,7 +4,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 import unittest
 
-from scout_backend import GoldRepository, LeaderboardArgs, ScoutAssistant
+from scout_backend import (
+    GoldRepository, LeaderboardArgs, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
+)
 
 
 class FakeCursor:
@@ -79,6 +81,40 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("passes_with_accuracy >= ?", statement)
         self.assertEqual(parameters, [450, 100, 5])
 
+    def test_shortlist_allows_only_known_role(self):
+        with self.assertRaises(ValueError):
+            self.repo.shortlist(ShortlistArgs(
+                role="defensive_mid; DROP TABLE x", season=2025, league_id=None,
+                max_age=None, min_minutes=1500, exclude_team=None, limit=10,
+            ))
+        self.assertEqual(self.capture, [])
+
+    def test_shortlist_ranks_whole_pool_then_binds_filters(self):
+        self.repo.shortlist(ShortlistArgs(
+            role="defensive_mid", season=2025, league_id=39, max_age=23,
+            min_minutes=1500, exclude_team="Chelsea'", limit=5,
+        ))
+        statement, parameters = self.capture[0]
+        pool, output = statement.split("FROM ranked")
+        self.assertIn("percent_rank() OVER (ORDER BY tackles_per_90)", pool)
+        self.assertNotIn("league_id = ?", pool)
+        self.assertIn("p_cap <= 0.6", output)
+        self.assertNotIn("Chelsea", statement)
+        self.assertEqual(parameters, [2025, "M", 1500, 39, 23, "Chelsea'", 5])
+
+    def test_shortlist_without_filters_is_valid_sql(self):
+        self.repo.shortlist(ShortlistArgs(
+            role="striker", season=2025, league_id=None, max_age=None,
+            min_minutes=900, exclude_team=None, limit=10,
+        ))
+        statement, parameters = self.capture[0]
+        self.assertIn("WHERE TRUE", statement)
+        self.assertEqual(parameters, [2025, "F", 900, 10])
+
+    def test_role_weights_sum_to_one(self):
+        for role, profile in ROLE_PROFILES.items():
+            self.assertAlmostEqual(sum(profile["weights"].values()), 1.0, msg=role)
+
 
 class FakeResponses:
     def __init__(self, answer="Ten scored 0.57 per 90 [10:39:2025]."):
@@ -116,6 +152,20 @@ class AssistantTests(unittest.TestCase):
                                    client, "configured-model")
         with self.assertRaisesRegex(RuntimeError, "cite retrieved"):
             assistant.ask("How did player 10 score?")
+
+    def test_follow_up_sends_earlier_turns_and_may_cite_them(self):
+        responses = FakeResponses("Ten [10:39:2025] trails Nine [9:39:2025].")
+        assistant = ScoutAssistant(GoldRepository(lambda: FakeConnection([])),
+                                   SimpleNamespace(responses=responses), "configured-model")
+        previous = [{"role": "user", "content": "How did player 9 score?"},
+                    {"role": "assistant", "content": "Nine scored 0.80 per 90 [9:39:2025]."}]
+
+        result = assistant.ask("And compared with player 10?", previous)
+
+        self.assertEqual(responses.requests[0]["input"][:2], previous)
+        self.assertEqual(responses.requests[0]["input"][2]["content"],
+                         "And compared with player 10?")
+        self.assertEqual([row["source_id"] for row in result["sources"]], ["10:39:2025"])
 
 
 if __name__ == "__main__":
