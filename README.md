@@ -1,26 +1,5 @@
 ## Football Data Project
 
-### Compare players in the browser
-
-The comparison UI reads matchday CSV files directly from the S3 bucket used
-by `sync_matchday_stats.py`. Configure `AWS_S3_BUCKET`, `AWS_S3_PREFIX` (optional),
-`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_REGION` in `.env` or
-`.dotenv`. Shell environment variables take precedence. IAM credentials from
-the usual boto3 provider chain also work. The AWS principal needs
-`s3:ListBucket` on the bucket and `s3:GetObject` on the CSV objects.
-
-```bash
-python -m pip install -r requirements.txt
-python -m streamlit run compare_players_app.py
-```
-
-Use the sidebar to filter leagues, seasons, teams, and matchdays. Select up to ten
-players and the stat columns to compare. Counting stats can be shown as totals
-or per 90 minutes. Rating is averaged across matches. Pass accuracy is accurate
-passes as a percentage of passes attempted; API-Football's `passes_accuracy`
-field is a count of accurate passes, not a percentage. The comparison can be
-downloaded as CSV.
-
 ### Five league matchday sync
 
 `sync_matchday_stats.py` fetches Premier League (39), La Liga (140), Bundesliga
@@ -39,8 +18,8 @@ State lives in
 
 The first run with this layout refetches completed fixtures because prior state
 entries do not represent matchday files. Existing fixture and older matchday
-objects are left in S3. The comparison app and Databricks reader use only the
-current nested matchday layout; run the sync to completion before relying on them.
+objects are left in S3. The Databricks reader uses only the
+current nested matchday layout; run the sync to completion before relying on it.
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
 
@@ -204,16 +183,26 @@ the source API has been ingested.
 
 `scout_api.py` serves the gold summaries over HTTP. Run the updated gold SQL
 before starting it so `passes_with_accuracy` is available. It provides player
-name search, player season summaries, a metric leaderboard, a ranking metric
-list, and a scouting question endpoint. The question endpoint uses fixed
-read-only tools over the gold tables and returns the retrieved season rows
-alongside its answer. Model-generated SQL cannot run. Questions are
-independent; the service does not retain chat history. The data contains
-statistical indicators and has no written scout observations or transfer
-history.
+name search, player season summaries, a metric leaderboard, a role shortlist,
+a list of ranking metrics and roles, and a scouting question endpoint. The
+question endpoint uses fixed read-only tools over the gold tables and returns
+the retrieved season rows alongside its answer. Model-generated SQL cannot
+run. The service does not retain chat history. For a follow-up question, send
+the earlier turns in `history` (up to 20, each with a `role` of `user` or
+`assistant` and its `content`). The data contains statistical indicators and
+has no written scout observations, transfer history, fees, or contracts.
 Rankings require at least the requested minutes of coverage for per 90 stats.
 Percentage rankings also require a minimum number of observed attempts or
 rated matches.
+
+A shortlist scores players of one position for a role: `defensive_mid`,
+`creative_mid`, `defender`, or `striker`. `role_score` is a 0 to 100 weighted
+average of percentile ranks, taken among all players of that position in the
+season with at least `min_minutes`, across all five leagues. League, age, and
+club filters narrow the output without changing a score. The weights are in
+`ROLE_PROFILES` in `scout_backend.py`. Positions in the data are only
+goalkeeper, defender, midfielder, and forward, so a role is a statistical
+profile, not a recorded position.
 
 Install `requirements.txt` and set these server-side environment variables:
 
@@ -232,6 +221,7 @@ Start the service with `uvicorn scout_api:app`. Its OpenAPI description is at
 ```bash
 curl 'http://localhost:8000/players?name=Haaland'
 curl 'http://localhost:8000/leaderboard?metric=goals_per_90&season=2025&min_minutes=900'
+curl 'http://localhost:8000/shortlist?role=defensive_mid&season=2025&max_age=24&exclude_team=Chelsea'
 curl -X POST 'http://localhost:8000/scout/ask' \
   -H "X-Scout-API-Key: $SCOUT_API_KEY" \
   -H 'Content-Type: application/json' \
@@ -245,3 +235,19 @@ The API limits query size and tool calls, but these limits do not replace a
 public traffic control layer. The Databricks identity needs `SELECT` on the
 two gold objects, access to their catalog and schema, and permission to use
 its SQL warehouse.
+
+### Scout chat
+
+`scout_chat_app.py` is a Streamlit chat over the same assistant. It keeps the
+conversation in the browser session, sends the earlier turns with each
+question, and shows the season rows behind each answer.
+
+```bash
+python -m pip install -r requirements.txt
+python -m streamlit run scout_chat_app.py
+```
+
+The app calls the assistant in its own process, so it needs the Databricks
+and OpenAI variables above but not `SCOUT_API_KEY`, and `scout_api.py` does
+not have to be running. Anyone who can open the app can ask questions, so
+put it behind your own sign-in. `app.yaml` starts it as a Databricks App.

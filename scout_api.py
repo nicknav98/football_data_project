@@ -5,18 +5,28 @@ from __future__ import annotations
 from functools import lru_cache
 import os
 import secrets
+from typing import Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from pydantic import BaseModel, Field, field_validator
 
-from scout_backend import GoldRepository, LeaderboardArgs, RANK_METRICS, ScoutAssistant
+from scout_backend import (
+    GoldRepository, LeaderboardArgs, RANK_METRICS, ROLE_PROFILES,
+    ScoutAssistant, ShortlistArgs,
+)
 
 
 app = FastAPI(title="Football scout API", version="1.0.0")
 
 
+class ChatTurn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4000)
+
+
 class ScoutQuestion(BaseModel):
     question: str = Field(min_length=8, max_length=600)
+    history: list[ChatTurn] = Field(default_factory=list, max_length=20)
 
     @field_validator("question")
     @classmethod
@@ -57,7 +67,7 @@ def health() -> dict[str, str]:
 
 @app.get("/metrics")
 def metrics() -> dict[str, list[str]]:
-    return {"ranking_metrics": sorted(RANK_METRICS)}
+    return {"ranking_metrics": sorted(RANK_METRICS), "roles": sorted(ROLE_PROFILES)}
 
 
 @app.get("/players")
@@ -106,9 +116,32 @@ def leaderboard(
         raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
 
 
+@app.get("/shortlist")
+def shortlist(
+    role: str,
+    season: int,
+    league_id: int | None = None,
+    max_age: int | None = Query(default=None, ge=15, le=45),
+    min_minutes: int = Query(default=1500, ge=90, le=10000),
+    exclude_team: str | None = Query(default=None, max_length=60),
+    limit: int = Query(default=10, ge=1, le=10),
+    store: GoldRepository = Depends(repository),
+) -> dict:
+    if role not in ROLE_PROFILES:
+        raise HTTPException(status_code=422, detail="Unsupported role")
+    try:
+        args = ShortlistArgs(role=role, season=season, league_id=league_id,
+                             max_age=max_age, min_minutes=min_minutes,
+                             exclude_team=exclude_team, limit=limit)
+        return {"players": store.shortlist(args)}
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
+
+
 @app.post("/scout/ask", dependencies=[Depends(require_scout_key)])
 def ask_scout(question: ScoutQuestion) -> dict:
     try:
-        return assistant().ask(question.question)
+        previous = [turn.model_dump() for turn in question.history]
+        return assistant().ask(question.question, previous)
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Scouting assistant is unavailable") from exc
