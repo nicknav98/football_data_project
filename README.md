@@ -86,6 +86,21 @@ Each task receives the catalog and schema as parameters.
 | `dev` | `[dev <user>] MatchDay Ingest` | `dev_<user>_football_data_project`, created by the bundle with its four volumes | Paused |
 | `prod` | `MatchDay Ingest` | `football_data_project`, existing and not managed by the bundle | Daily |
 
+`resources/sportmonks_ingest.job.yml` defines a second job, Sportmonks Ingest,
+for files written by the Sportmonks sync. It runs the same scripts and silver
+notebook against its own schema, so its bronze and silver tables are separate
+from the API-Football ones. It copies from the S3 prefix
+`sportmonks/football-matchday-stats`; set `SPORTMONKS_S3_PREFIX` to that value
+for the sync.
+
+| Target | Job name | Schema | Schedule |
+| --- | --- | --- | --- |
+| `dev` | `[dev <user>] Sportmonks Ingest` | `dev_<user>_football_data_project_sportmonks` | Paused |
+| `prod` | `Sportmonks Ingest` | `football_data_project_sportmonks` | Daily |
+
+The bundle creates the Sportmonks schema and its four volumes in both targets.
+Run it with `databricks bundle run sportmonks_ingest`.
+
 The first `prod` deploy creates a new job beside any job made by hand in the
 UI. To have the bundle take over an existing job instead, run
 `databricks bundle deployment bind matchday_ingest <job id> -t prod` before

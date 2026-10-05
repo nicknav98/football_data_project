@@ -1,0 +1,100 @@
+# The Sportmonks pipeline. It runs the same scripts and silver notebook as
+# MatchDay Ingest, against its own schema and S3 prefix. Sportmonks has its
+# own fixture, team, and player IDs, so its rows never share a table with
+# API-Football's.
+resources:
+  # The bundle owns this schema and its volumes in every target. Development
+  # mode prefixes the schema name, which var.sportmonks_schema accounts for.
+  schemas:
+    sportmonks:
+      catalog_name: ${var.catalog}
+      name: football_data_project_sportmonks
+      comment: Football data pipeline fed by Sportmonks.
+
+  volumes:
+    sportmonks_football_data:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sportmonks.name}
+      name: football_data
+      volume_type: MANAGED
+    sportmonks_player_profiles_data:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sportmonks.name}
+      name: player_profiles_data
+      volume_type: MANAGED
+    sportmonks_checkpoints:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sportmonks.name}
+      name: _checkpoints
+      volume_type: MANAGED
+    sportmonks_schemas:
+      catalog_name: ${var.catalog}
+      schema_name: ${resources.schemas.sportmonks.name}
+      name: _schemas
+      volume_type: MANAGED
+
+  jobs:
+    sportmonks_ingest:
+      name: Sportmonks Ingest
+      max_concurrent_runs: 1
+      performance_target: PERFORMANCE_OPTIMIZED
+      queue:
+        enabled: true
+      trigger:
+        periodic:
+          interval: 1
+          unit: DAYS
+
+      environments:
+        - environment_key: default
+          spec:
+            environment_version: "6"
+
+      tasks:
+        - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_volume_sync.py
+            parameters:
+              - "--catalog"
+              - "${var.catalog}"
+              - "--schema"
+              - "${var.sportmonks_schema}"
+              - "--s3-prefix"
+              - "sportmonks/football-matchday-stats"
+
+        - task_key: ingest_player_profiles
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_player_profiles.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.sportmonks_schema}"]
+
+        - task_key: ingest_fixtures
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_fixtures.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.sportmonks_schema}"]
+
+        - task_key: ingest_matchday_stats
+          depends_on:
+            - task_key: copy_s3_data
+          environment_key: default
+          spark_python_task:
+            python_file: ../databricks_matchday_stream.py
+            parameters: ["--catalog", "${var.catalog}", "--schema", "${var.sportmonks_schema}"]
+
+        - task_key: silver
+          depends_on:
+            - task_key: ingest_matchday_stats
+            - task_key: ingest_fixtures
+          run_if: ALL_DONE
+          notebook_task:
+            notebook_path: ../Silver Layer Matchday Stats By League.ipynb
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.sportmonks_schema}
+              full_refresh: "false"
