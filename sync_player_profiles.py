@@ -7,15 +7,17 @@ from datetime import datetime, timedelta, timezone
 
 import pandas as pd
 
+import sportmonks
 import sync_matchday_stats as matchdays
 
 
-PROFILE_CACHE_PATH = matchdays.ROOT / "state" / "player_profiles.json"
+PROFILE_CACHE_PATH = matchdays.STATE_PATH.parent / "player_profiles.json"
 OUTPUT_PATH = matchdays.OUTPUT_DIR / "reference" / "player_profiles" / "player_profiles.csv"
 PROFILE_COLUMNS = (
     "player_id", "name", "firstname", "lastname", "age", "birth_date",
     "birth_place", "birth_country", "nationality", "height", "weight",
-    "injured", "photo", "source_league_id", "source_season", "fetched_at",
+    "injured", "photo", "position", "detailed_position",
+    "source_league_id", "source_season", "fetched_at",
 )
 # Nullable whole numbers; Int64 keeps "30" rather than "30.0" next to blanks,
 # which the bronze loader's integer columns would otherwise read as null.
@@ -24,6 +26,8 @@ PROFILE_INT_COLUMNS = ("player_id", "age", "source_league_id", "source_season")
 
 def fetch_profiles(api_get=matchdays.api_get):
     """Read all pages for each league and season, keeping one player row."""
+    if matchdays.PROVIDER == "sportmonks":
+        return sportmonks.fetch_profiles(matchdays.LEAGUES, matchdays.SEASONS)
     profiles = {}
     fetched_at = datetime.now(timezone.utc).isoformat()
     for season in matchdays.SEASONS:
@@ -62,6 +66,9 @@ def fetch_profiles(api_get=matchdays.api_get):
                         "weight": player.get("weight"),
                         "injured": player.get("injured"),
                         "photo": player.get("photo"),
+                        # API-Football has no position on a profile.
+                        "position": None,
+                        "detailed_position": None,
                         "source_league_id": league_id,
                         "source_season": season,
                         "fetched_at": fetched_at,

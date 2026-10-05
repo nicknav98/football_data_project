@@ -12,7 +12,9 @@ import boto3
 import pandas as pd
 import requests
 
-ROOT = Path(__file__).resolve().parent
+import sportmonks
+
+ROOT =Path(__file__).resolve().parent
 STATE_PATH = ROOT / "state" / "processed_fixtures.json"
 OUTPUT_DIR = ROOT / "output"
 
@@ -38,6 +40,11 @@ FIXTURE_INT_COLUMNS = (
     "venue_id", "home_team_id", "away_team_id",
     "home_goals", "away_goals", "halftime_home_goals", "halftime_away_goals",
 )
+# Matchday columns the bronze loader reads as integers. A substitute who did
+# not play has blanks here, which would otherwise turn the column into floats.
+MATCHDAY_INT_COLUMNS = (
+    "games_number", "passes_accuracy", "cards_yellow", "cards_red", "penalty_scored",
+)
 
 
 def load_env(path=ROOT / ".env"):
@@ -59,13 +66,22 @@ HISTORY_SEASONS = int(os.environ.get("FOOTBALL_HISTORY_SEASONS", 2))
 if HISTORY_SEASONS < 0:
     raise ValueError("FOOTBALL_HISTORY_SEASONS must be zero or greater")
 SEASONS = tuple(range(SEASON - HISTORY_SEASONS, SEASON + 1))
-API_KEY = os.environ["FOOTBALL_API_KEY"]
+PROVIDER = os.environ.get("FOOTBALL_DATA_PROVIDER", "api_football")
+if PROVIDER not in ("api_football", "sportmonks"):
+    raise ValueError("FOOTBALL_DATA_PROVIDER must be api_football or sportmonks")
 AWS_S3_BUCKET = os.environ["AWS_S3_BUCKET"]
-AWS_S3_PREFIX = os.environ.get("AWS_S3_PREFIX", "").strip("/")
 AWS_REGION = os.environ.get("AWS_REGION")  # optional - falls back to the default provider chain
 
 http_session = requests.Session()
-http_session.headers.update({"x-apisports-key": API_KEY})
+if PROVIDER == "sportmonks":
+    # Sportmonks has its own fixture, team, and player IDs. Its files, state,
+    # and S3 prefix stay apart from API-Football's so the two never mix in bronze.
+    STATE_PATH = ROOT / "state" / "sportmonks" / "processed_fixtures.json"
+    OUTPUT_DIR = ROOT / "output" / "sportmonks"
+    AWS_S3_PREFIX = os.environ["SPORTMONKS_S3_PREFIX"].strip("/")
+else:
+    AWS_S3_PREFIX = os.environ.get("AWS_S3_PREFIX", "").strip("/")
+    http_session.headers.update({"x-apisports-key": os.environ["FOOTBALL_API_KEY"]})
 _last_request_time = 0.0
 
 
@@ -110,11 +126,15 @@ def api_get(path, params=None, max_retries=3):
 
 
 def get_fixtures(league_id, season):
+    if PROVIDER == "sportmonks":
+        return sportmonks.get_fixtures(league_id, season)
     return api_get("/fixtures", params={"league": league_id, "season": season})["response"]
 
 
 def get_fixture_player_stats(fixture_id):
     """Raw per-player statistics for both teams in a single fixture."""
+    if PROVIDER == "sportmonks":
+        return sportmonks.get_fixture_player_stats(fixture_id)
     return api_get("/fixtures/players", params={"fixture": fixture_id})
 
 
@@ -298,6 +318,9 @@ def sync_league_season(league_id, season, state, s3):
         df = pd.DataFrame(rows)
         df.insert(0, "season", season)
         df.insert(0, "league_id", league_id)
+        for column in MATCHDAY_INT_COLUMNS:
+            if column in df:
+                df[column] = df[column].astype("Int64")
 
         relative_path = matchday_path(league_id, season, round_name)
         local_path = OUTPUT_DIR / relative_path

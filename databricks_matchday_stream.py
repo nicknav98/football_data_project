@@ -55,6 +55,9 @@ SCHEMA = StructType(
         StructField("games_minutes", DoubleType(), nullable=True),
         StructField("games_number", IntegerType(), nullable=True),
         StructField("games_position", StringType(), nullable=True),
+        # Written by the Sportmonks sync only.
+        StructField("games_detailed_position", StringType(), nullable=True),
+        StructField("games_formation_field", StringType(), nullable=True),
         StructField("games_rating", DoubleType(), nullable=True),
         StructField("games_captain", BooleanType(), nullable=True),
         StructField("games_substitute", BooleanType(), nullable=True),
