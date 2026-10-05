@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 import json
+import logging
 import os
 import re
 from typing import Any
@@ -14,6 +15,10 @@ from pydantic import BaseModel, Field
 
 GOLD_SEASONS = "workspace.football_data_project.gold_player_season_summary"
 GOLD_OBSERVED = "workspace.football_data_project.gold_player_observed_summary"
+LOGGER = logging.getLogger(__name__)
+MAX_TOOL_CALLS = 6
+MODEL_OUTPUT_TOKENS = 4096
+MODEL_RETRY_OUTPUT_TOKENS = 8192
 
 SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
     primary_position, team_names, matches_in_data, appearances, starts,
@@ -152,15 +157,27 @@ class GoldRepository:
 
     def search_players(self, name: str, limit: int = 10) -> list[dict[str, Any]]:
         args = SearchArgs(name=name.strip(), limit=limit)
+        filters = ["contains(lower(player_name), lower(?))"]
+        parameters: list[Any] = [args.name]
+        # API-Football names often use initials, such as J. Garner and R. Lavia.
+        variants = [args.name.lower().replace(".", "").replace(" ", "")]
+        parts = args.name.split()
+        if len(parts) > 1:
+            variants.append((parts[0][0] + "".join(parts[1:])).lower().replace(".", ""))
+        for variant in dict.fromkeys(variants):
+            if len(variant) >= 2:
+                filters.append("contains(regexp_replace(lower(player_name), '[. ]', ''), ?)")
+                parameters.append(variant)
+        parameters.append(args.limit)
         return self._query(
             f"""SELECT player_id, player_name, profile_age, nationality,
                        first_season_in_data, last_season_in_data,
                        leagues_in_data, appearances, minutes
                 FROM {GOLD_OBSERVED}
-                WHERE contains(lower(player_name), lower(?))
+                WHERE {' OR '.join(filters)}
                 ORDER BY appearances DESC, player_name, player_id
                 LIMIT ?""",
-            [args.name.strip(), args.limit],
+            parameters,
         )
 
     def player_seasons(self, player_id: int) -> list[dict[str, Any]]:
@@ -308,8 +325,12 @@ TOOLS = [
 INSTRUCTIONS = """You are a football scouting assistant. Answer only from tool results
 from the loaded five leagues and observed seasons. Use tools before answering.
 For named players, search first to resolve their player ID, then get their
-season summaries. For rankings, use leaderboard with a sensible minute floor.
-For recruitment or "who should we sign" questions, use shortlist with the
+season summaries. Stored names may use initials. If a name search finds no
+matches, try the surname. If several candidates could match, ask the user to
+clarify rather than choosing an ID arbitrarily. For rankings, use leaderboard
+with a sensible minute floor.
+For comparing explicitly named players, retrieve both players' season summaries.
+For open-ended recruitment or "who should we sign" questions, use shortlist with the
 closest role and describe role_score as a statistical fit, not a verdict.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
@@ -328,6 +349,36 @@ class ScoutAssistant:
         self.client = client
         self.model = model
 
+    def _response(self, history: list[Any], call_count: int) -> Any:
+        tool_choice = "required" if call_count == 0 else (
+            "none" if call_count == MAX_TOOL_CALLS else "auto"
+        )
+        for budget in (MODEL_OUTPUT_TOKENS, MODEL_RETRY_OUTPUT_TOKENS):
+            response = self.client.responses.create(
+                model=self.model,
+                instructions=INSTRUCTIONS,
+                input=history,
+                tools=TOOLS,
+                tool_choice=tool_choice,
+                store=False,
+                max_output_tokens=budget,
+            )
+            status = getattr(response, "status", "completed")
+            details = getattr(response, "incomplete_details", None)
+            reason = getattr(details, "reason", None)
+            if status == "incomplete" and reason == "max_output_tokens":
+                LOGGER.warning("Scout model response truncated: model=%s budget=%s lookups=%s",
+                               self.model, budget, call_count)
+                if budget == MODEL_OUTPUT_TOKENS:
+                    # Discard partial output and retry the same step before executing tools.
+                    continue
+                raise RuntimeError("Scouting model reached its response token limit. "
+                                   "Try a narrower comparison.")
+            if status != "completed":
+                raise RuntimeError(f"Scouting model response was not completed ({reason or status}). "
+                                   "Try rephrasing the question.")
+            return response
+
     def ask(self, question: str, previous: list[dict[str, str]] | None = None) -> dict[str, Any]:
         """Answer a question; previous holds earlier {"role", "content"} turns."""
         previous = previous or []
@@ -340,29 +391,26 @@ class ScoutAssistant:
         sources: dict[str, dict[str, Any]] = {}
         found_candidates = False
         call_count = 0
-        for _ in range(4):
-            response = self.client.responses.create(
-                model=self.model,
-                instructions=INSTRUCTIONS,
-                input=history,
-                tools=TOOLS,
-                tool_choice="required" if call_count == 0 else "auto",
-                store=False,
-                max_output_tokens=700,
-            )
+        # Allow a final answer after six sequential lookups, as well as parallel calls.
+        for _ in range(MAX_TOOL_CALLS + 1):
+            response = self._response(history, call_count)
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
-                if not sources and not found_candidates:
-                    return {"answer": "No player season data was retrieved for this question.", "sources": []}
                 answer = response.output_text.strip()
                 if not answer:
                     raise RuntimeError("Assistant returned an empty answer")
+                if call_count == 0:
+                    raise RuntimeError("Assistant did not perform a data lookup")
+                if not sources and not found_candidates:
+                    return {"answer": "No player season data was retrieved for this question. "
+                                      "Try searching by surname or check the available season coverage.",
+                            "sources": []}
                 if sources:
                     citations = set(re.findall(r"\[(\d+:\d+:\d+)\]", answer))
                     if not citations or not citations <= sources.keys() | cited_before:
                         raise RuntimeError("Assistant did not cite retrieved season rows")
                 return {"answer": answer, "sources": list(sources.values())}
-            if call_count + len(calls) > 6:
+            if call_count + len(calls) > MAX_TOOL_CALLS:
                 raise RuntimeError("Assistant exceeded the data lookup limit")
             history.extend(response.output)
             for call in calls:
@@ -378,6 +426,7 @@ class ScoutAssistant:
                     rows = self.repository.shortlist(ShortlistArgs.model_validate(args))
                 else:
                     raise RuntimeError("Assistant requested an unknown data tool")
+                LOGGER.info("Scout data lookup: tool=%s rows=%s", call.name, len(rows))
                 for row in rows:
                     if all(key in row for key in ("player_id", "league_id", "season")):
                         source_id = f"{row['player_id']}:{row['league_id']}:{row['season']}"

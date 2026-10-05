@@ -219,6 +219,17 @@ The API and Streamlit chat automatically load `.env` beside `scout_api.py`.
 Variables already set in the process environment take precedence. Restart the
 running service after changing configuration.
 
+Player search handles initial spacing (`J.Garner` versus `J. Garner`) and full
+names whose stored form uses an initial (`Romeo Lavia` versus `R. Lavia`).
+Multiple matching players still require clarification.
+
+The assistant allows up to six data lookups and a final answer. Each model
+response has a 4,096-token budget, including reasoning tokens. A response
+truncated by that budget is retried once with 8,192 tokens before any partial
+tool calls are executed. Further truncation produces a token-limit error,
+not a claim that player data is missing. Truncation warnings appear in the
+application logs.
+
 Start the service with `uvicorn scout_api:app`. Its OpenAPI description is at
 `/docs`. Example requests:
 

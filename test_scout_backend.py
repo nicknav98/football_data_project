@@ -1,11 +1,15 @@
 """Checks for bounded SQL access and evidence returned by the assistant."""
 
 from decimal import Decimal
+import re
+import sqlite3
 from types import SimpleNamespace
 import unittest
+from unittest.mock import Mock, patch
 
 from scout_backend import (
-    GoldRepository, LeaderboardArgs, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
+    GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
+    MODEL_RETRY_OUTPUT_TOKENS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
 )
 
 
@@ -51,8 +55,40 @@ class RepositoryTests(unittest.TestCase):
         rows = self.repo.search_players("O'Brien%", 3)
         statement, parameters = self.capture[0]
         self.assertNotIn("O'Brien", statement)
-        self.assertEqual(parameters, ["O'Brien%", 3])
+        self.assertEqual(parameters, ["O'Brien%", "o'brien%", 3])
         self.assertEqual(rows[0]["goals_per_90"], 0.57)
+
+    def test_name_search_matches_spacing_and_full_names_against_initials(self):
+        # Execute the generated search SQL against named fixture rows, including
+        # bound parameters. SQLite supplies the two Spark string functions here.
+        with sqlite3.connect(":memory:") as connection:
+            connection.row_factory = sqlite3.Row
+            connection.create_function("contains", 2, lambda value, part: part in value)
+            connection.create_function("regexp_replace", 3,
+                                       lambda value, pattern, replacement:
+                                       re.sub(pattern, replacement, value))
+            connection.execute("""CREATE TABLE players (
+                player_id INTEGER, player_name TEXT, profile_age INTEGER,
+                nationality TEXT, first_season_in_data INTEGER,
+                last_season_in_data INTEGER, leagues_in_data TEXT,
+                appearances INTEGER, minutes INTEGER)""")
+            connection.executemany("INSERT INTO players VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", [
+                (10, "J. Garner", 25, "England", 2024, 2026, "39", 10, 900),
+                (11, "R. Lavia", 22, "Belgium", 2024, 2026, "39", 10, 900),
+            ])
+            def query(statement, parameters):
+                return [dict(row) for row in connection.execute(statement, parameters)]
+
+            with patch("scout_backend.GOLD_OBSERVED", "players"), \
+                    patch.object(self.repo, "_query", side_effect=query):
+                for name, expected_id in (("J.Garner", 10), ("James Garner", 10),
+                                          ("Romeo Lavia", 11), ("Lavia", 11)):
+                    with self.subTest(name=name):
+                        self.assertEqual([row["player_id"] for row in
+                                          self.repo.search_players(name)], [expected_id])
+                self.assertEqual(self.repo.search_players("Nobody"), [])
+                self.assertEqual(self.repo.search_players("Garner' OR 1=1"), [])
+                self.assertEqual(self.repo.search_players(".."), [])
 
     def test_leaderboard_allows_only_known_metric(self):
         with self.assertRaises(ValueError):
@@ -130,7 +166,37 @@ class FakeResponses:
         return SimpleNamespace(output=[], output_text=self.answer)
 
 
+def function_response(name="player_seasons", arguments='{"player_id":10}', call_id="call_1"):
+    return SimpleNamespace(status="completed", output_text="", output=[
+        SimpleNamespace(type="function_call", name=name, arguments=arguments, call_id=call_id)
+    ])
+
+
+def text_response(answer="Ten scored 0.57 per 90 [10:39:2025]."):
+    return SimpleNamespace(status="completed", output=[], output_text=answer)
+
+
+def incomplete_response(reason="max_output_tokens", output=None, answer=""):
+    return SimpleNamespace(status="incomplete", incomplete_details=SimpleNamespace(reason=reason),
+                           output=output or [], output_text=answer)
+
+
+class ScriptedResponses:
+    def __init__(self, *responses):
+        self.responses = iter(responses)
+        self.requests = []
+
+    def create(self, **kwargs):
+        self.requests.append({**kwargs, "input": list(kwargs["input"])})
+        return next(self.responses)
+
+
 class AssistantTests(unittest.TestCase):
+    def scripted_assistant(self, *responses, repository=None):
+        model = ScriptedResponses(*responses)
+        repository = repository or GoldRepository(lambda: FakeConnection([]))
+        return ScoutAssistant(repository, SimpleNamespace(responses=model), "configured-model"), model
+
     def test_answer_includes_retrieved_season_and_limits_model_tools(self):
         capture = []
         responses = FakeResponses()
@@ -144,7 +210,86 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(result["sources"][0]["goals_per_90"], 0.57)
         self.assertEqual(responses.requests[0]["tool_choice"], "required")
         self.assertFalse(responses.requests[0]["store"])
+        self.assertEqual(responses.requests[0]["max_output_tokens"], MODEL_OUTPUT_TOKENS)
         self.assertEqual(responses.requests[1]["tool_choice"], "auto")
+
+    def test_initial_truncation_retries_before_declaring_no_data(self):
+        assistant, model = self.scripted_assistant(
+            incomplete_response(), function_response(), text_response())
+        result = assistant.ask("How is J.Garner doing?")
+        self.assertEqual(result["sources"][0]["source_id"], "10:39:2025")
+        self.assertEqual([request["max_output_tokens"] for request in model.requests],
+                         [MODEL_OUTPUT_TOKENS, MODEL_RETRY_OUTPUT_TOKENS, MODEL_OUTPUT_TOKENS])
+        self.assertEqual(model.requests[0]["input"], model.requests[1]["input"])
+        self.assertEqual(model.requests[1]["tool_choice"], "required")
+
+    def test_final_truncation_retries_without_rerunning_data_lookup(self):
+        repository = Mock()
+        repository.player_seasons.return_value = [
+            {"player_id": 10, "league_id": 39, "season": 2025, "goals_per_90": 0.57}
+        ]
+        assistant, model = self.scripted_assistant(
+            function_response(), incomplete_response(), text_response(), repository=repository)
+        self.assertTrue(assistant.ask("How did player 10 score?")["answer"])
+        repository.player_seasons.assert_called_once_with(10)
+        self.assertEqual(model.requests[1]["input"], model.requests[2]["input"])
+
+    def test_partial_tool_arguments_are_discarded_before_retry(self):
+        partial = function_response(arguments='{"player_id":').output
+        assistant, model = self.scripted_assistant(
+            incomplete_response(output=partial), function_response(), text_response())
+        self.assertTrue(assistant.ask("How did player 10 score?")["sources"])
+        self.assertEqual(model.requests[0]["input"], model.requests[1]["input"])
+
+    def test_repeated_truncation_reports_token_limit_not_missing_data(self):
+        assistant, model = self.scripted_assistant(incomplete_response(), incomplete_response())
+        with self.assertRaisesRegex(RuntimeError, "response token limit"):
+            assistant.ask("How is J.Garner doing?")
+        self.assertEqual(len(model.requests), 2)
+
+    def test_other_incomplete_response_is_not_retried_or_returned(self):
+        assistant, model = self.scripted_assistant(
+            incomplete_response(reason="content_filter", answer="partial answer"))
+        with self.assertRaisesRegex(RuntimeError, "content_filter"):
+            assistant.ask("How did player 10 score?")
+        self.assertEqual(len(model.requests), 1)
+
+    def test_empty_completed_response_does_not_claim_no_data(self):
+        assistant, _ = self.scripted_assistant(text_response(""))
+        with self.assertRaisesRegex(RuntimeError, "empty answer"):
+            assistant.ask("How did player 10 score?")
+
+    def test_genuine_empty_lookup_returns_coverage_guidance(self):
+        repository = Mock()
+        repository.search_players.return_value = []
+        assistant, _ = self.scripted_assistant(
+            function_response("search_players", '{"name":"Nobody","limit":10}'),
+            text_response("No match."), repository=repository)
+        result = assistant.ask("How did Nobody score?")
+        self.assertEqual(result["sources"], [])
+        self.assertIn("surname", result["answer"])
+
+    def test_named_comparison_can_finish_after_four_sequential_lookups(self):
+        assistant, model = self.scripted_assistant(
+            function_response("search_players", '{"name":"Garner","limit":10}', "one"),
+            function_response(call_id="two"),
+            function_response("search_players", '{"name":"Lavia","limit":10}', "three"),
+            function_response(call_id="four"), text_response())
+        self.assertTrue(assistant.ask("Compare Garner with Lavia")["answer"])
+        self.assertEqual(len(model.requests), 5)
+
+    def test_six_sequential_lookups_leave_room_for_final_answer(self):
+        calls = [function_response(call_id=str(index)) for index in range(MAX_TOOL_CALLS)]
+        assistant, model = self.scripted_assistant(*calls, text_response())
+        self.assertTrue(assistant.ask("Compare these player seasons")["sources"])
+        self.assertEqual(model.requests[-1]["tool_choice"], "none")
+
+    def test_more_than_six_tool_calls_are_rejected(self):
+        calls = [function_response(call_id=str(index)).output[0]
+                 for index in range(MAX_TOOL_CALLS + 1)]
+        assistant, _ = self.scripted_assistant(SimpleNamespace(output=calls, output_text=""))
+        with self.assertRaisesRegex(RuntimeError, "lookup limit"):
+            assistant.ask("Compare these player seasons")
 
     def test_answer_rejects_unretrieved_citation(self):
         client = SimpleNamespace(responses=FakeResponses("Claim [99:39:2025]."))
