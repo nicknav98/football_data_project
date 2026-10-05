@@ -17,6 +17,8 @@ PROFILE_SCHEMA = StructType([
     StructField("weight", StringType()),
     StructField("injured", BooleanType()),
     StructField("photo", StringType()),
+    StructField("position", StringType()),
+    StructField("detailed_position", StringType()),
     StructField("source_league_id", IntegerType()),
     StructField("source_season", IntegerType()),
     StructField("fetched_at", StringType()),

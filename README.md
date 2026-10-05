@@ -23,6 +23,46 @@ current nested matchday layout; run the sync to completion before relying on it.
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
 
+### Sportmonks as the data provider
+
+Both sync scripts can read from Sportmonks instead of API-Football. Set these
+in `.env`:
+
+| Variable | Purpose |
+| --- | --- |
+| `FOOTBALL_DATA_PROVIDER` | `sportmonks`, or `api_football` (the default) |
+| `SPORTMONKS_API_TOKEN` | Sportmonks API token |
+| `SPORTMONKS_S3_PREFIX` | S3 prefix for Sportmonks files, required when the provider is `sportmonks` |
+
+`sportmonks.py` converts Sportmonks responses to the API-Football layout, so
+the CSV files keep their names and columns. League IDs (39, 140, 78, 135, 61)
+and seasons (2025 for 2025/26) are unchanged. Fixture, team, and player IDs
+are Sportmonks IDs, so the two providers' rows must never share a bronze
+table. For that reason Sportmonks files go to their own S3 prefix, with state
+in `state/sportmonks/` and local copies in `output/sportmonks/`. To cut over,
+load them into empty bronze tables with new Auto Loader checkpoint and schema
+locations, then rebuild silver and gold.
+
+Differences from API-Football data:
+
+- Sportmonks leaves a statistic out when it is zero. A count missing for a
+  player who played is written as 0 when the fixture has detailed statistics.
+  Saves and penalties saved are filled for goalkeepers only. A substitute who
+  did not play has blank statistics.
+- Matchday rows gain `games_detailed_position` and `games_formation_field`.
+  The detailed position is the slot in the starting formation, such as
+  Central Midfield. It is blank for substitutes and rarely says Defensive
+  Midfield.
+- Profiles gain `position` and `detailed_position`, the player's usual role,
+  such as Defensive Midfield. Profiles come from each team's season squad.
+  `birth_place`, `birth_country`, and `injured` are blank.
+- A second yellow card adds one to `cards_red`.
+- `tackles_blocks` is Sportmonks' blocked shots.
+
+One fixture's statistics take one request, and a league season's fixture list
+takes eight. Sportmonks allows a set number of requests per entity per hour.
+When that runs out, the sync waits for the reset and continues.
+
 ### Deploying the Databricks job
 
 `databricks.yml` and `resources/matchday_ingest.job.yml` define the MatchDay
