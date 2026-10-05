@@ -25,7 +25,7 @@ def show_turn(turn: dict) -> None:
         st.markdown(turn["content"])
         if turn.get("sources"):
             with st.expander(f"Season rows retrieved ({len(turn['sources'])})"):
-                st.dataframe(turn["sources"], width="stretch")
+                st.dataframe(turn["sources"], use_container_width=True)
 
 
 for turn in turns:
