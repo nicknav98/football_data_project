@@ -59,8 +59,17 @@ How Sportmonks statistics become rows:
   substitutes and rarely says Defensive Midfield, so use the profile's
   `detailed_position` for a player's role.
 - `passes_accuracy` is the number of accurate passes, not a percentage.
+- `team_possession_pct` is the team's share of possession over the whole
+  match, the same on every row of that team.
+- Rows also carry statistics API-Football never had: touches, passes into the
+  final third, crosses, long balls, through balls, big chances created and
+  missed, shots off target, blocked, and against the woodwork, own goals,
+  possession lost, dispossessed, tackles won, clearances, ball recoveries,
+  aerials won and lost, errors leading to a shot or goal, and for goalkeepers
+  saves inside the box, goals conceded, punches, and high claims.
+- `shots_total` includes blocked shots. `shots_blocked` is the player's own
+  shots that were blocked; `tackles_blocks` is shots the player blocked.
 - A second yellow card adds one to `cards_red`.
-- `tackles_blocks` is Sportmonks' blocked shots.
 
 One fixture's statistics take one request, and a league season's fixture list
 takes eight. Sportmonks allows a set number of requests per entity per hour.
@@ -68,7 +77,12 @@ When that runs out, the sync waits for the reset and continues. Connection
 failures and HTTP 429 or 5xx responses are retried up to three times.
 
 `com.footballdata.matchdaysync.plist` runs the sync every three hours on
-macOS.
+macOS. Run the sync on one machine only: each keeps its own state, so a second
+machine fetches every fixture again and uses the same hourly allowance.
+
+After a change that adds columns, delete `state/sportmonks/processed_fixtures.json`
+and run the sync to fetch every fixture again. Bronze and silver add the new
+columns when the job next runs.
 
 ### Fixtures
 
@@ -136,7 +150,8 @@ The job tasks:
   the manifest to force a full copy.
 - **`databricks_matchday_stream.py`** upserts `bronze_matchday_stats` by
   league, season, fixture, team, and player. It reads only files named
-  `*_MATCHDAY_*.csv` and fails if a key column is null.
+  `*_MATCHDAY_*.csv` and fails if a key column is null. When files bring new
+  columns, Auto Loader stops once and the task's retry reads them.
 - **`databricks_fixtures.py`** upserts `bronze_fixtures` by league, season,
   and fixture ID.
 - **`databricks_player_profiles.py`** upserts `bronze_player_profiles` by
@@ -193,7 +208,19 @@ The season summary includes teams, appearances, starts, minutes, position,
 percentages, pass accuracy (`accurate_passes` over `passes_with_accuracy`,
 counting matches that report both), and the latest available profile fields.
 It also has offsides, blocks, times dribbled past, fouls drawn and committed,
-and penalties won, committed, scored, missed, and saved. `non_penalty_goals`
+and penalties won, committed, scored, missed, and saved, and totals for the
+extra Sportmonks statistics, with per 90 rates for touches, passes into the
+final third, big chances created, possession lost, clearances, ball
+recoveries, and aerials won, and percentages for aerials, crosses, long balls,
+and tackles.
+
+`tackles_possession_adjusted_per_90` and
+`interceptions_possession_adjusted_per_90` correct for how much of the ball a
+player's team has. Each match's count is multiplied by 50 and divided by the
+opponent's possession, so a player whose opponents had 60% of the ball has the
+count scaled down by a sixth. Possession is the team's for the whole match,
+not only while the player was on the pitch. `average_team_possession_pct` is
+the team's possession weighted by the player's minutes. `non_penalty_goals`
 uses only matches that report both goals and penalties scored. `save_pct` is
 saves divided by saves plus goals conceded, counted in matches played as
 goalkeeper. Percentages use matches where both parts of the ratio are present.
