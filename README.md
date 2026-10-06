@@ -48,7 +48,10 @@ Differences from API-Football data:
 - Sportmonks leaves a statistic out when it is zero. A count missing for a
   player who played is written as 0 when the fixture has detailed statistics.
   Saves and penalties saved are filled for goalkeepers only. A substitute who
-  did not play has blank statistics.
+  did not play has blank statistics. A total, such as dribbles attempted,
+  stays blank when Sportmonks reports only its part.
+- Sportmonks has no player ID for a few lineup entries. The sync skips them
+  and prints the fixture and name.
 - Matchday rows gain `games_detailed_position` and `games_formation_field`.
   The detailed position is the slot in the starting formation, such as
   Central Midfield. It is blank for substitutes and rarely says Defensive
@@ -106,8 +109,11 @@ UI. To have the bundle take over an existing job instead, run
 `databricks bundle deployment bind matchday_ingest <job id> -t prod` before
 deploying. To reprocess all of bronze into silver, run the job with the
 `silver` task's `full_refresh` parameter set to `true`.
-`databricks_gold_player_summaries.sql` is not part of the bundle and names the
-production schema directly.
+`databricks_gold_player_summaries.sql` is not part of the bundle. Its table
+names have no schema, so select the pipeline's schema before running it, for
+example `USE workspace.football_data_project_sportmonks`. It reads the
+profile's `detailed_position`, so the profile table must have been loaded by
+the current `sync_player_profiles.py`.
 
 ### Copying S3 files into Databricks volumes
 

@@ -112,6 +112,19 @@ class PlayerStatsTests(unittest.TestCase):
         self.assertEqual((rows[11]["goals_saves"], rows[11]["penalty_saved"]), (3, 0))
         self.assertIsNone(rows[11]["games_rating"])
 
+    def test_whole_stays_blank_when_only_its_part_is_reported(self):
+        entry = lineup(10, 1, 27, [detail("minutes-played", 90), detail("passes", 20),
+                                   detail("successful-dribbles", 1)])
+        row = self.rows({**FIXTURE, "lineups": [entry]})[10]
+        self.assertEqual(row["dribbles_success"], 1)
+        self.assertIsNone(row["dribbles_attempts"])
+        self.assertEqual(row["shots_total"], 0)
+
+    def test_lineup_entry_without_a_player_id_is_skipped(self):
+        unknown = {**lineup(13, 1, 27, [detail("minutes-played", 9)], bench=True), "player_id": None}
+        rows = self.rows({**FIXTURE, "lineups": FIXTURE["lineups"] + [unknown]})
+        self.assertEqual(sorted(rows), [10, 11, 12])
+
     def test_second_yellow_counts_as_a_red_card(self):
         self.assertEqual((self.rows()[10]["cards_yellow"], self.rows()[10]["cards_red"]), (1, 1))
 

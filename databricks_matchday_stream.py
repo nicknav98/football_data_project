@@ -153,6 +153,11 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
     def upsert_batch(micro_batch_df, batch_id):
         from pyspark.sql.functions import current_timestamp
         micro_batch_df = micro_batch_df.withColumn("ingestion_time", current_timestamp())
+        # A key that fails to parse becomes null, and the rows that share it
+        # would collapse into one below.
+        missing_key = " OR ".join(f"{key} IS NULL" for key in MERGE_KEYS)
+        if micro_batch_df.filter(missing_key).head(1):
+            raise ValueError(f"Matchday rows have a null key column ({', '.join(MERGE_KEYS)})")
         micro_batch_df = micro_batch_df.dropDuplicates(list(MERGE_KEYS))
 
         if not spark.catalog.tableExists(target_table):
