@@ -50,7 +50,7 @@ and [Scout](docs/scout.md#configuration).
 
 | Path | Contents |
 | --- | --- |
-| `sync_*.py`, `sportmonks.py` | Local sync from Sportmonks to S3 |
+| `sync_*.py`, `sportmonks.py`, `scheduled_sync.py` | Local sync from Sportmonks to S3, and its scheduled wrapper |
 | `databricks_*.py`, `*.ipynb`, `*.sql` | Code that runs in Databricks |
 | `databricks.yml`, `resources/` | Databricks Asset Bundle: schema, volumes, job |
 | `scout_*.py`, `app.yaml` | Scout API and chat app |
