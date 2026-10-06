@@ -14,8 +14,13 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-GOLD_SEASONS = "workspace.football_data_project.gold_player_season_summary"
-GOLD_OBSERVED = "workspace.football_data_project.gold_player_observed_summary"
+# The gold views built from Sportmonks data. Names are placed in SQL text, so
+# the schema is checked rather than trusted.
+GOLD_SCHEMA = os.getenv("SCOUT_GOLD_SCHEMA", "workspace.football_data_project_sportmonks")
+if not re.fullmatch(r"\w+\.\w+", GOLD_SCHEMA):
+    raise ValueError("SCOUT_GOLD_SCHEMA must be a catalog and schema, such as workspace.my_schema")
+GOLD_SEASONS = f"{GOLD_SCHEMA}.gold_player_season_summary"
+GOLD_OBSERVED = f"{GOLD_SCHEMA}.gold_player_observed_summary"
 LOGGER = logging.getLogger(__name__)
 MAX_TOOL_CALLS = 6
 MODEL_OUTPUT_TOKENS = 4096
@@ -23,7 +28,7 @@ MODEL_RETRY_OUTPUT_TOKENS = 8192
 MODEL_REQUEST_TIMEOUT_SECONDS = 120
 
 SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
-    primary_position, team_names, matches_in_data, appearances, starts,
+    primary_position, detailed_position, team_names, matches_in_data, appearances, starts,
     substitute_appearances, minutes, goals, goals_observed_minutes,
     goals_per_90, assists, assists_observed_minutes, assists_per_90,
     shots, shots_observed_minutes, shots_per_90, shots_on_target_pct,
@@ -54,32 +59,50 @@ RATIO_COVERAGE = {
     "average_rating": ("matches_with_rating", 5),
 }
 
-# Each role scores players of one position by weighted percentile ranks. The
-# keys of "weights" are fixed SQL expressions over the season columns. "cap"
-# drops players above a percentile of a stat that does not fit the role.
+# Each role scores the players whose usual position, from their Sportmonks
+# profile, is one of "positions". The score is a weighted sum of percentile
+# ranks among those players. The keys of "weights" are fixed SQL expressions
+# over the season columns.
 PASSES_PER_90 = "passes_attempted * 90.0 / minutes"
 ROLE_PROFILES: dict[str, dict[str, Any]] = {
     "defensive_mid": {
-        "position": "M",
+        "positions": ["Defensive Midfield"],
         "weights": {"tackles_per_90": 0.25, "interceptions_per_90": 0.25,
                     "duel_win_pct": 0.20, "pass_accuracy_pct": 0.15,
                     PASSES_PER_90: 0.15},
-        "cap": ("shots_per_90", 0.6),
+    },
+    "central_mid": {
+        "positions": ["Central Midfield"],
+        "weights": {"key_passes_per_90": 0.20, PASSES_PER_90: 0.20,
+                    "pass_accuracy_pct": 0.15, "tackles_per_90": 0.15,
+                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15},
     },
     "creative_mid": {
-        "position": "M",
+        "positions": ["Attacking Midfield"],
         "weights": {"key_passes_per_90": 0.35, "assists_per_90": 0.25,
-                    "pass_accuracy_pct": 0.15, PASSES_PER_90: 0.15,
+                    "goals_per_90": 0.15, "pass_accuracy_pct": 0.15,
                     "dribble_success_pct": 0.10},
     },
-    "defender": {
-        "position": "D",
+    "winger": {
+        "positions": ["Left Wing", "Right Wing", "Left Midfield", "Right Midfield"],
+        "weights": {"goals_per_90": 0.25, "key_passes_per_90": 0.25,
+                    "assists_per_90": 0.20, "shots_per_90": 0.15,
+                    "dribble_success_pct": 0.15},
+    },
+    "centre_back": {
+        "positions": ["Centre Back"],
         "weights": {"duel_win_pct": 0.30, "interceptions_per_90": 0.25,
                     "tackles_per_90": 0.20, "pass_accuracy_pct": 0.15,
                     PASSES_PER_90: 0.10},
     },
+    "full_back": {
+        "positions": ["Left Back", "Right Back"],
+        "weights": {"tackles_per_90": 0.20, "key_passes_per_90": 0.20,
+                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15,
+                    "pass_accuracy_pct": 0.15, "dribble_success_pct": 0.15},
+    },
     "striker": {
-        "position": "F",
+        "positions": ["Centre Forward", "Secondary Striker"],
         "weights": {"goals_per_90": 0.40, "shots_per_90": 0.15,
                     "shots_on_target_pct": 0.15, "assists_per_90": 0.15,
                     "key_passes_per_90": 0.15},
@@ -233,11 +256,8 @@ class GoldRepository:
         # Percentiles cover every league in the season, so the filters below
         # narrow the output without changing a player's score.
         filters = []
-        parameters: list[Any] = [args.season, profile["position"], args.min_minutes]
-        if "cap" in profile:
-            capped, ceiling = profile["cap"]
-            ranks.append(f"percent_rank() OVER (ORDER BY {capped}) AS p_cap")
-            filters.append(f"p_cap <= {ceiling}")
+        positions = profile["positions"]
+        parameters: list[Any] = [args.season, *positions, args.min_minutes]
         if args.league_id is not None:
             filters.append("league_id = ?")
             parameters.append(args.league_id)
@@ -252,7 +272,9 @@ class GoldRepository:
             f"""WITH pool AS (
                     SELECT {SEASON_COLUMNS}
                     FROM {GOLD_SEASONS}
-                    WHERE season = ? AND primary_position = ? AND minutes >= ?
+                    WHERE season = ?
+                        AND detailed_position IN ({', '.join('?' * len(positions))})
+                        AND minutes >= ?
                 ), ranked AS (
                     SELECT *, count(*) OVER () AS pool_size, {', '.join(ranks)}
                     FROM pool
@@ -306,7 +328,7 @@ TOOLS = [
     },
     {
         "type": "function", "name": "shortlist", "strict": True,
-        "description": "Shortlist players for a role in one season. role_score is a 0-100 weighted percentile among players of that position across all five leagues with at least min_minutes. Use at least 1500 minutes for a completed season unless the user asks otherwise.",
+        "description": "Shortlist players for a role in one season. A role covers the players whose usual position on their profile fits it, such as Defensive Midfield, shown as detailed_position. role_score is a 0-100 weighted percentile among those players across all five leagues with at least min_minutes. Use at least 1500 minutes for a completed season unless the user asks otherwise.",
         "parameters": {
             "type": "object", "additionalProperties": False,
             "properties": {
@@ -334,6 +356,9 @@ with a sensible minute floor.
 For comparing explicitly named players, retrieve both players' season summaries.
 For open-ended recruitment or "who should we sign" questions, use shortlist with the
 closest role and describe role_score as a statistical fit, not a verdict.
+Tackles, interceptions, and other defensive counts are per 90 minutes and are
+not adjusted for possession, so players on teams with less of the ball tend
+to post higher numbers; say so when ranking on them.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
 give context for follow-up questions; retrieve data again before answering.
