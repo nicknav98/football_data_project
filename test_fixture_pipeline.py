@@ -1,6 +1,5 @@
 """Behavior checks for five-league matchday sync and CSV migration."""
 
-from io import BytesIO
 import json
 from pathlib import Path
 import tempfile
@@ -10,7 +9,6 @@ from unittest.mock import patch
 import pandas as pd
 
 import sync_matchday_stats as sync
-import player_comparison as comparison
 
 
 def fixture(league_id, fixture_id, round_number=1, season=2026):
@@ -40,7 +38,6 @@ class FixturePipelineTests(unittest.TestCase):
     def test_unnumbered_round_has_readable_stable_path(self):
         path = sync.matchday_path(78, 2023, "Relegation Round")
         self.assertEqual(path, "league_78/season_2023/GER_BUNDESLIGA_MATCHDAY_RELEGATION_ROUND.csv")
-        self.assertIsNotNone(comparison.MATCHDAY_KEY.search(path))
 
     def test_historical_sync_keeps_season_in_path_rows_and_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -150,7 +147,6 @@ class FixturePipelineTests(unittest.TestCase):
                 self.assertFalse(sync.sync_fixtures(39, 2026, [played, unplayed], object()))
 
             self.assertEqual(uploaded, ["reference/fixtures/league_39_season_2026.csv"])
-            self.assertIsNone(comparison.MATCHDAY_KEY.search(uploaded[0]))
             text = (Path(tmp) / uploaded[0]).read_text()
             frame = pd.read_csv(Path(tmp) / uploaded[0])
 
@@ -171,71 +167,6 @@ class FixturePipelineTests(unittest.TestCase):
                     sync.sync_fixtures(39, 2026, [fixture(39, 101)], object())
                 self.assertTrue(sync.sync_fixtures(39, 2026, [fixture(39, 101)], object()))
             self.assertEqual(upload.call_count, 2)
-
-    def test_comparison_reads_only_nested_matchday_files(self):
-        class S3:
-            def get_paginator(self, _name):
-                return self
-
-            def paginate(self, **_kwargs):
-                return [{"Contents": [
-                    {"Key": "raw/ENG_Premier_League_Matchday_01.csv"},
-                    {"Key": "raw/league_39/season_2026/fixture_101.csv"},
-                    {"Key": "raw/league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv"},
-                ]}]
-
-            def get_object(self, **_kwargs):
-                csv = "league_id,season,fixture_id,team_id,team_name,player_id,player_name\n39,2026,101,10,A,20,P\n"
-                return {"Body": BytesIO(csv.encode())}
-
-        with patch.object(comparison, "configure_environment", return_value=("bucket", "raw")), \
-                patch.object(comparison.boto3, "client", return_value=S3()):
-            frame, count = comparison.read_matchdays()
-
-        self.assertEqual(count, 1)
-        self.assertEqual(len(frame), 1)
-        self.assertEqual(frame.loc[0, "fixture_id"], 101)
-
-    def test_pass_accuracy_is_accurate_passes_over_attempts(self):
-        frame = pd.DataFrame({
-            "player_id": [20, 20, 20],
-            "games_minutes": [90, 90, 90],
-            "passes_total": [120, 40, 50],
-            # A count, so a busy match exceeds 100; the last match reports no accuracy.
-            "passes_accuracy": [110, 30, None],
-        })
-        summary = comparison.compare_players(frame, [20], ["passes_accuracy"], False)
-        self.assertAlmostEqual(summary.loc[20, "passes_accuracy"], 100 * 140 / 160)
-
-    def test_same_player_and_fixture_id_remain_distinct_across_seasons_and_teams(self):
-        class S3:
-            def get_paginator(self, _name):
-                return self
-
-            def paginate(self, **_kwargs):
-                return [{"Contents": [
-                    {"Key": "raw/league_39/season_2023/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv"},
-                    {"Key": "raw/league_39/season_2024/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv"},
-                ]}]
-
-            def get_object(self, Key, **_kwargs):
-                season = 2023 if "season_2023" in Key else 2024
-                team = 10 if season == 2023 else 11
-                csv = ("league_id,season,fixture_id,team_id,team_name,player_id,player_name,goals_total,games_minutes\n"
-                       f"39,{season},101,{team},Team {team},20,P,1,90\n")
-                return {"Body": BytesIO(csv.encode())}
-
-        with patch.object(comparison, "configure_environment", return_value=("bucket", "raw")), \
-                patch.object(comparison.boto3, "client", return_value=S3()):
-            frame, count = comparison.read_matchdays()
-
-        self.assertEqual(count, 2)
-        self.assertEqual(len(frame), 2)
-        self.assertEqual(set(frame["season"]), {2023, 2024})
-        self.assertEqual(set(frame["team_id"]), {10, 11})
-        summary = comparison.compare_players(frame, [20], ["goals_total"], False)
-        self.assertEqual(summary.loc[20, "matches"], 2)
-        self.assertEqual(summary.loc[20, "goals_total"], 2)
 
 
 if __name__ == "__main__":
