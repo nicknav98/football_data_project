@@ -386,6 +386,19 @@ If information is absent or coverage is incomplete, say so. Keep the answer
 concise and report the season and league for comparisons."""
 
 
+def cited_rows(text: str) -> set[str]:
+    """Season rows cited in an answer, as player_id:league_id:season.
+
+    Accepts the forms a model drifts into: spaces around the colons, and
+    several rows inside one pair of brackets.
+    """
+    return {
+        ":".join(row)
+        for group in re.findall(r"\[([^\[\]]*)\]", text)
+        for row in re.findall(r"(\d+)\s*:\s*(\d+)\s*:\s*(\d+)", group)
+    }
+
+
 class ScoutAssistant:
     def __init__(self, repository: GoldRepository, client: Any, model: str):
         self.repository = repository
@@ -446,13 +459,15 @@ class ScoutAssistant:
         # Rows cited in earlier answers may be cited again in a follow-up.
         cited_before = {
             citation for turn in previous if turn["role"] == "assistant"
-            for citation in re.findall(r"\[(\d+:\d+:\d+)\]", turn["content"])
+            for citation in cited_rows(turn["content"])
         }
         sources: dict[str, dict[str, Any]] = {}
         found_candidates = False
         call_count = 0
-        # Allow a final answer after six sequential lookups, as well as parallel calls.
-        for _ in range(MAX_TOOL_CALLS + 1):
+        corrected = False
+        # Allow a final answer after six sequential lookups, as well as parallel
+        # calls, and one more turn to correct an answer's citations.
+        for _ in range(MAX_TOOL_CALLS + 2):
             response = self._response(history, call_count)
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
@@ -466,9 +481,27 @@ class ScoutAssistant:
                                       "Try searching by surname or check the available season coverage.",
                             "sources": []}
                 if sources:
-                    citations = set(re.findall(r"\[(\d+:\d+:\d+)\]", answer))
-                    if not citations or not citations <= sources.keys() | cited_before:
-                        raise RuntimeError("Assistant did not cite retrieved season rows")
+                    citations = cited_rows(answer)
+                    unknown = sorted(citations - (sources.keys() | cited_before))
+                    if not citations or unknown:
+                        problem = (f"it cited rows that were not retrieved: {', '.join(unknown)}"
+                                   if unknown else "it cited no season row")
+                        # The rejected text is the only evidence of what went wrong.
+                        LOGGER.warning("Scout answer rejected (%s): retrieved=%s answer=%r",
+                                       problem, sorted(sources), answer[:3000])
+                        if corrected:
+                            raise RuntimeError(
+                                "Assistant did not cite retrieved season rows: " + problem)
+                        corrected = True
+                        history.append({"role": "assistant", "content": answer})
+                        history.append({"role": "user", "content": (
+                            f"That answer was not shown to the user because {problem}. Write it "
+                            "again. Cite each figure as [player_id:league_id:season], one row per "
+                            "pair of brackets, using only these retrieved rows: "
+                            + ", ".join(f"[{row}]" for row in sorted(sources)) + ". "
+                            "To use a player whose rows are not listed, retrieve them first. "
+                            "Give no figures for a player without a retrieved row.")})
+                        continue
                 return {"answer": answer, "sources": list(sources.values())}
             if call_count + len(calls) > MAX_TOOL_CALLS:
                 raise RuntimeError("Assistant exceeded the data lookup limit")
