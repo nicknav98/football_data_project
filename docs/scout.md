@@ -54,30 +54,35 @@ players, across all five leagues, with at least `min_minutes`.
 
 | Role | Detailed positions | Weights |
 | --- | --- | --- |
-| `defensive_mid` | Defensive Midfield | Tackles 25, interceptions 25, duels won % 20, pass accuracy 15, passes 15 |
-| `central_mid` | Central Midfield | Key passes 20, passes 20, pass accuracy 15, tackles 15, interceptions 15, duels won % 15 |
-| `creative_mid` | Attacking Midfield | Key passes 35, assists 25, goals 15, pass accuracy 15, dribble success 10 |
-| `winger` | Left/Right Wing, Left/Right Midfield | Goals 25, key passes 25, assists 20, shots 15, dribble success 15 |
-| `centre_back` | Centre Back | Duels won % 30, interceptions 25, tackles 20, pass accuracy 15, passes 10 |
-| `full_back` | Left Back, Right Back | Tackles 20, key passes 20, interceptions 15, duels won % 15, pass accuracy 15, dribble success 15 |
+| `defensive_mid` | Defensive Midfield | Duels won % 25, adjusted tackles 20, adjusted interceptions 20, ball recoveries 15, pass accuracy 10, passes 10 |
+| `central_mid` | Central Midfield | Key passes 15, final-third passes 15, passes 15, pass accuracy 15, adjusted tackles 10, adjusted interceptions 10, ball recoveries 10, duels won % 10 |
+| `creative_mid` | Attacking Midfield | Key passes 30, big chances created 20, assists 20, goals 15, dribble success 15 |
+| `winger` | Left/Right Wing, Left/Right Midfield | Goals 25, key passes 20, big chances created 15, assists 15, dribble success 15, shots 10 |
+| `centre_back` | Centre Back | Duels won % 20, aerials won % 20, adjusted interceptions 20, adjusted tackles 10, clearances 10, pass accuracy 10, passes 10 |
+| `full_back` | Left Back, Right Back | Adjusted tackles 20, key passes 20, adjusted interceptions 15, duels won % 15, pass accuracy 15, dribble success 15 |
 | `striker` | Centre Forward, Secondary Striker | Goals 40, shots 15, shots on target % 15, assists 15, key passes 15 |
 
-Counts are per 90. Weights live in `ROLE_PROFILES` in `scout_backend.py`.
-League, age, and club filters narrow the list without changing a score.
+Counts are per 90. "Adjusted" means possession-adjusted: see
+[Statistics](statistics.md#how-rates-are-computed). Weights live in
+`ROLE_PROFILES` in `scout_backend.py`. League, age, and club filters narrow
+the list without changing a score.
 
-The roles do not yet use the possession-adjusted rates or the extra
-statistics in gold. See [Statistics](statistics.md).
+Percentages in a role score have no minimum-attempts guard beyond
+`min_minutes`.
 
 ## Ranking metrics
 
 `goals_per_90`, `assists_per_90`, `shots_per_90`, `key_passes_per_90`,
 `tackles_per_90`, `interceptions_per_90`, `saves_per_90`, `pass_accuracy_pct`,
-`duel_win_pct`, `dribble_success_pct`, `average_rating`.
+`duel_win_pct`, `dribble_success_pct`, `average_rating`,
+`tackles_possession_adjusted_per_90`, `interceptions_possession_adjusted_per_90`,
+`ball_recoveries_per_90`, `clearances_per_90`, `big_chances_created_per_90`,
+`passes_final_third_per_90`, `touches_per_90`, `aerial_win_pct`.
 
 | Guard | Rule |
 | --- | --- |
 | Per 90 | Minutes with that statistic must reach `min_minutes` |
-| Percentages | At least 100 passes, 20 duels, 10 dribbles |
+| Percentages | At least 100 passes, 20 duels, 20 aerial duels, 10 dribbles |
 | Rating | At least 5 rated matches |
 
 ## Assistant
