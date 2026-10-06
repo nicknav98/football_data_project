@@ -1,10 +1,11 @@
-"""Sportmonks v3 client that returns data in the shapes the sync scripts already use.
+"""Sportmonks v3 client that returns data in the shapes the sync scripts read.
 
-Fixtures and player statistics are converted to the API-Football layout, so
-sync_matchday_stats.py writes the same CSV columns for either provider.
-Fixture, team, and player IDs are Sportmonks IDs. League IDs and seasons stay
-as the project has always written them (39 for the Premier League, 2025 for
-2025/26), because paths, silver, gold, and the scout API are keyed on them.
+Fixtures and player statistics are converted to the nested layout that
+sync_matchday_stats.py flattens into CSV columns. That layout and the column
+names come from API-Football, the project's first provider. Fixture, team,
+and player IDs are Sportmonks IDs. League IDs and seasons are the project's
+own (39 for the Premier League, 2025 for 2025/26), because paths, silver,
+gold, and the scout API are keyed on them.
 """
 import os
 import time
@@ -37,7 +38,7 @@ COUNTS = {
     "goals_saves": "saves",
     "passes_total": "passes",
     "passes_key": "key-passes",
-    "passes_accuracy": "accurate-passes",  # a count, as in API-Football
+    "passes_accuracy": "accurate-passes",  # a count, not a percentage
     "tackles_total": "tackles",
     "tackles_blocks": "blocked-shots",
     "tackles_interceptions": "interceptions",
@@ -151,7 +152,7 @@ def get_fixtures(league_id, season):
 
 
 def to_fixture(league_id, season, row):
-    """One Sportmonks fixture in the API-Football /fixtures layout."""
+    """One Sportmonks fixture in the layout flatten_fixture reads."""
     sides = {p["meta"]["location"]: p for p in row.get("participants") or []}
 
     def goals(description):
@@ -189,7 +190,7 @@ def get_fixture_player_stats(fixture_id):
 
 
 def to_player_stats(row):
-    """One fixture's lineups in the API-Football /fixtures/players layout."""
+    """One fixture's lineups in the layout flatten_fixture_players reads."""
     lineups = row.get("lineups") or []
     values = [{d["type"]["code"]: d["data"].get("value") for d in entry.get("details") or []}
               for entry in lineups]

@@ -24,60 +24,9 @@ PROFILE_COLUMNS = (
 PROFILE_INT_COLUMNS = ("player_id", "age", "source_league_id", "source_season")
 
 
-def fetch_profiles(api_get=matchdays.api_get):
-    """Read all pages for each league and season, keeping one player row."""
-    if matchdays.PROVIDER == "sportmonks":
-        return sportmonks.fetch_profiles(matchdays.LEAGUES, matchdays.SEASONS)
-    profiles = {}
-    fetched_at = datetime.now(timezone.utc).isoformat()
-    for season in matchdays.SEASONS:
-        for league_id in matchdays.LEAGUES:
-            print(f"Fetching profiles for league {league_id}, season {season}", flush=True)
-            page = 1
-            while True:
-                try:
-                    payload = api_get("/players", {"league": league_id, "season": season, "page": page})
-                except Exception as exc:
-                    raise RuntimeError(
-                        f"Profile fetch failed for league {league_id}, season {season}, page {page}"
-                    ) from exc
-                paging = payload.get("paging") or {}
-                current = int(paging.get("current", page))
-                total = int(paging.get("total", 1))
-                if current != page or total < page:
-                    raise ValueError(f"Invalid /players paging for league {league_id}, season {season}")
-                if page == 1 and not payload.get("response"):
-                    raise ValueError(f"No players for league {league_id}, season {season}")
-                for item in payload["response"]:
-                    player = item["player"]
-                    player_id = player["id"]
-                    birth = player.get("birth") or {}
-                    profiles[player_id] = {
-                        "player_id": player_id,
-                        "name": player.get("name"),
-                        "firstname": player.get("firstname"),
-                        "lastname": player.get("lastname"),
-                        "age": player.get("age"),
-                        "birth_date": birth.get("date"),
-                        "birth_place": birth.get("place"),
-                        "birth_country": birth.get("country"),
-                        "nationality": player.get("nationality"),
-                        "height": player.get("height"),
-                        "weight": player.get("weight"),
-                        "injured": player.get("injured"),
-                        "photo": player.get("photo"),
-                        # API-Football has no position on a profile.
-                        "position": None,
-                        "detailed_position": None,
-                        "source_league_id": league_id,
-                        "source_season": season,
-                        "fetched_at": fetched_at,
-                    }
-                if page == total:
-                    break
-                page += 1
-            print(f"  completed {total} pages; {len(profiles)} distinct players", flush=True)
-    return profiles
+def fetch_profiles():
+    """One profile per player from every team's squad in each league season."""
+    return sportmonks.fetch_profiles(matchdays.LEAGUES, matchdays.SEASONS)
 
 
 def load_or_fetch_profiles(fetch=fetch_profiles):

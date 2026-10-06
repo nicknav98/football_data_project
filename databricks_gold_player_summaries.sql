@@ -124,8 +124,7 @@ SELECT
     s.season,
     COALESCE(p.name, s.matchday_player_name) AS player_name,
     r.games_position AS primary_position,
-    /* The player's usual role from the profile, such as Defensive Midfield.
-       API-Football profiles leave it null. */
+    /* The player's usual role from the profile, such as Defensive Midfield. */
     p.detailed_position,
     s.team_names,
     s.teams_played_for,

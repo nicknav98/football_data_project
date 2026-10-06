@@ -4,7 +4,7 @@ CSVs produced by sync_matchday_stats.py (one file per matchday, uploaded to an S
 bucket that's synced into a Databricks Volume via databricks_volume_sync.py).
 
 The volume is organised into season subdirectories:
-  /Volumes/workspace/football_data_project/football_data/
+  /Volumes/workspace/football_data_project_sportmonks/football_data/
       2024/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
       2024/ESP_LA_LIGA_MATCHDAY_06.csv
       ...
@@ -28,7 +28,7 @@ presence of NaN, even though the values are conceptually whole numbers.
 Columns that are always present stay as plain ints/bools.
 
 cloudFiles.inferColumnTypes is left on (schema inference ON) so any new
-column api-football adds later is picked up automatically. SCHEMA acts as
+column the sync adds later is picked up automatically. SCHEMA acts as
 schemaHints so the columns we already know about are typed exactly as
 above instead of being (re-)guessed from the first batch of files.
 """
@@ -94,10 +94,10 @@ SCHEMA = StructType(
 def read_matchday_stream(spark, source_path, schema_location):
     """Auto Loader stream over the matchday CSVs.
 
-    source_path:     e.g. "/Volumes/workspace/football_data_project/football_data"
+    source_path:     e.g. "/Volumes/workspace/football_data_project_sportmonks/football_data"
                       (Auto Loader reads recursively, so it picks up every
                       YYYY/ season subdirectory automatically).
-    schema_location:  e.g. "/Volumes/workspace/football_data_project/_schemas/bronze_matchday_stats" -
+    schema_location:  e.g. "/Volumes/workspace/football_data_project_sportmonks/_schemas/bronze_matchday_stats" -
                       Auto Loader persists/evolves the inferred schema here
                       across stream restarts; give each source its own path.
     """
@@ -109,7 +109,7 @@ def read_matchday_stream(spark, source_path, schema_location):
         .option("cloudFiles.schemaHints", ", ".join(f"{f.name} {f.dataType.simpleString()}" for f in SCHEMA.fields))
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         # sync_matchday_stats.py re-uploads a matchday's CSV to the same
-        # S3 key when api-football corrects stats within STABILITY_WINDOW.
+        # S3 key when the provider corrects stats within STABILITY_WINDOW.
         # Without this, Auto Loader ignores a file it has already seen even
         # if its content changed, and the correction would never arrive.
         .option("cloudFiles.allowOverwrites", "true")
@@ -139,10 +139,10 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
     micro-batch on MERGE_KEYS so a corrected/re-uploaded matchday file
     updates existing rows instead of duplicating them.
 
-    checkpoint_path: e.g. "/Volumes/workspace/football_data_project/_checkpoints/bronze_matchday_stats" -
+    checkpoint_path: e.g. "/Volumes/workspace/football_data_project_sportmonks/_checkpoints/bronze_matchday_stats" -
                      tracks which files/offsets this stream has already
                      processed; give this stream its own path.
-    target_table:    e.g. "workspace.football_data_project.bronze_matchday_stats"
+    target_table:    e.g. "workspace.football_data_project_sportmonks.bronze_matchday_stats"
 
     Uses trigger(availableNow=True): processes everything currently sitting
     in source_path then stops, matching the existing "run sync_matchday_stats.py
@@ -193,7 +193,7 @@ if __name__ == "__main__":
     # The job passes --catalog and --schema; the defaults are the production schema.
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", default="workspace")
-    parser.add_argument("--schema", default="football_data_project")
+    parser.add_argument("--schema", default="football_data_project_sportmonks")
     args, _ = parser.parse_known_args()
     volumes = f"/Volumes/{args.catalog}/{args.schema}"
 
