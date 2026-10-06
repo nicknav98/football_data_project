@@ -1,7 +1,7 @@
 """
 Databricks Auto Loader (cloudFiles) ingestion for the matchday player-stats
 CSVs produced by sync_matchday_stats.py (one file per matchday, uploaded to an S3
-bucket that's synced into a Databricks Volume via update_volume_with_s3_data).
+bucket that's synced into a Databricks Volume via databricks_volume_sync.py).
 
 The volume is organised into season subdirectories:
   /Volumes/workspace/football_data_project/football_data/
@@ -17,7 +17,7 @@ The volume is organised into season subdirectories:
 This structure replaced the old flat layout where files from different seasons
 overwrote each other because the filenames lacked a year.  The S3 source
 itself uses league_{id}/season_{year}/... keys (see sync_matchday_stats.py);
-update_volume_with_s3_data preserves the season by placing each CSV into the
+databricks_volume_sync.py preserves the season by placing each CSV into the
 matching YYYY/ subdirectory on the volume.
 
 Schema below matches the actual CSV columns/types as written by pandas'

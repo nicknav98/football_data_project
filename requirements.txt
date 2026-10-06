@@ -2,13 +2,9 @@ pandas
 numpy
 requests
 pyarrow
-anthropic
 boto3
 python-dotenv
 streamlit
-google-api-python-client
-google-auth
-google-auth-oauthlib
 fastapi>=0.115
 uvicorn>=0.30
 databricks-sql-connector>=3.0
