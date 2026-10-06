@@ -12,7 +12,7 @@ from openai import OpenAI
 
 from scout_backend import (
     GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
-    MODEL_RETRY_OUTPUT_TOKENS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
+    MODEL_RETRY_OUTPUT_TOKENS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs, cited_rows,
 )
 
 
@@ -135,7 +135,7 @@ class RepositoryTests(unittest.TestCase):
         ))
         statement, parameters = self.capture[0]
         pool, output = statement.split("FROM ranked")
-        self.assertIn("percent_rank() OVER (ORDER BY tackles_per_90)", pool)
+        self.assertIn("percent_rank() OVER (ORDER BY tackles_possession_adjusted_per_90)", pool)
         self.assertNotIn("league_id = ?", pool)
         self.assertIn("detailed_position IN (?)", pool)
         self.assertNotIn("Chelsea", statement)
@@ -321,6 +321,32 @@ class AssistantTests(unittest.TestCase):
         assistant, _ = self.scripted_assistant(SimpleNamespace(output=calls, output_text=""))
         with self.assertRaisesRegex(RuntimeError, "lookup limit"):
             assistant.ask("Compare these player seasons")
+
+    def test_bad_citation_gets_one_correction_and_the_reason_is_logged(self):
+        class Responses(FakeResponses):
+            def create(self, **kwargs):
+                self.requests.append(kwargs)
+                if len(self.requests) == 1:
+                    return function_response()
+                answer = "Nine did well [9:39:2025]." if len(self.requests) == 2 else "Ten [10:39:2025]."
+                return SimpleNamespace(output=[], output_text=answer)
+
+        responses = Responses()
+        assistant = ScoutAssistant(GoldRepository(lambda: FakeConnection([])),
+                                   SimpleNamespace(responses=responses), "configured-model")
+        with self.assertLogs("scout_backend", level="WARNING") as logs:
+            result = assistant.ask("How did player 10 score?")
+
+        self.assertEqual(result["answer"], "Ten [10:39:2025].")
+        self.assertEqual(len(responses.requests), 3)
+        correction = responses.requests[2]["input"][-1]["content"]
+        self.assertIn("9:39:2025", correction)
+        self.assertIn("[10:39:2025]", correction)
+        self.assertIn("Nine did well", logs.output[0])
+
+    def test_citations_with_spaces_or_sharing_brackets_are_read(self):
+        self.assertEqual(cited_rows("A [10 : 39 : 2025] and B [9:39:2025, 9:39:2024]; see [note]."),
+                         {"10:39:2025", "9:39:2025", "9:39:2024"})
 
     def test_answer_rejects_unretrieved_citation(self):
         client = SimpleNamespace(responses=FakeResponses("Claim [99:39:2025]."))

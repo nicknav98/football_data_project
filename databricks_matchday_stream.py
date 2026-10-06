@@ -87,6 +87,34 @@ SCHEMA = StructType(
         StructField("penalty_scored", IntegerType(), nullable=True),
         StructField("penalty_missed", DoubleType(), nullable=True),
         StructField("penalty_saved", DoubleType(), nullable=True),
+        StructField("team_possession_pct", DoubleType(), nullable=True),
+        StructField("shots_off", DoubleType(), nullable=True),
+        StructField("shots_blocked", DoubleType(), nullable=True),
+        StructField("shots_woodwork", DoubleType(), nullable=True),
+        StructField("own_goals", DoubleType(), nullable=True),
+        StructField("big_chances_created", DoubleType(), nullable=True),
+        StructField("big_chances_missed", DoubleType(), nullable=True),
+        StructField("passes_final_third", DoubleType(), nullable=True),
+        StructField("crosses_total", DoubleType(), nullable=True),
+        StructField("crosses_accurate", DoubleType(), nullable=True),
+        StructField("long_balls_total", DoubleType(), nullable=True),
+        StructField("long_balls_accurate", DoubleType(), nullable=True),
+        StructField("through_balls_total", DoubleType(), nullable=True),
+        StructField("through_balls_accurate", DoubleType(), nullable=True),
+        StructField("touches", DoubleType(), nullable=True),
+        StructField("possession_lost", DoubleType(), nullable=True),
+        StructField("dispossessed", DoubleType(), nullable=True),
+        StructField("tackles_won", DoubleType(), nullable=True),
+        StructField("clearances", DoubleType(), nullable=True),
+        StructField("ball_recoveries", DoubleType(), nullable=True),
+        StructField("aerials_won", DoubleType(), nullable=True),
+        StructField("aerials_lost", DoubleType(), nullable=True),
+        StructField("errors_leading_to_shot", DoubleType(), nullable=True),
+        StructField("errors_leading_to_goal", DoubleType(), nullable=True),
+        StructField("saves_inside_box", DoubleType(), nullable=True),
+        StructField("goalkeeper_goals_conceded", DoubleType(), nullable=True),
+        StructField("goalkeeper_punches", DoubleType(), nullable=True),
+        StructField("goalkeeper_high_claims", DoubleType(), nullable=True),
     ]
 )
 
@@ -169,6 +197,8 @@ def write_bronze_stream(spark, source_path, schema_location, checkpoint_path, ta
         (
             target.alias("target")
             .merge(micro_batch_df.alias("source"), condition)
+            # Columns the sync adds later are added to bronze, not dropped.
+            .withSchemaEvolution()
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()
             .execute()

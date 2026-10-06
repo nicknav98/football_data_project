@@ -77,9 +77,12 @@ resources:
             python_file: ../databricks_fixtures.py
             parameters: ["--catalog", "${var.catalog}", "--schema", "${var.sportmonks_schema}"]
 
+        # Auto Loader stops once when files bring new columns, then reads them
+        # on the next attempt.
         - task_key: ingest_matchday_stats
           depends_on:
             - task_key: copy_s3_data
+          max_retries: 1
           environment_key: default
           spark_python_task:
             python_file: ../databricks_matchday_stream.py

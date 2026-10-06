@@ -40,13 +40,20 @@ SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
     passes_attempted, passes_with_accuracy, pass_accuracy_pct,
     saves, saves_observed_minutes,
     saves_per_90, average_rating, matches_with_rating, profile_age,
-    nationality, silver_as_of"""
+    nationality, average_team_possession_pct,
+    tackles_possession_adjusted_per_90, interceptions_possession_adjusted_per_90,
+    ball_recoveries_per_90, clearances_per_90, aerial_win_pct, aerials_with_won_data,
+    big_chances_created_per_90, passes_final_third_per_90, touches_per_90,
+    silver_as_of"""
 
 RANK_METRICS = {
     "goals_per_90", "assists_per_90", "shots_per_90",
     "key_passes_per_90", "tackles_per_90", "interceptions_per_90",
     "saves_per_90", "pass_accuracy_pct", "duel_win_pct",
     "dribble_success_pct", "average_rating",
+    "tackles_possession_adjusted_per_90", "interceptions_possession_adjusted_per_90",
+    "ball_recoveries_per_90", "clearances_per_90", "big_chances_created_per_90",
+    "passes_final_third_per_90", "touches_per_90", "aerial_win_pct",
 }
 PER_90_COVERAGE = {
     metric: metric.removesuffix("_per_90") + "_observed_minutes"
@@ -56,6 +63,7 @@ RATIO_COVERAGE = {
     "pass_accuracy_pct": ("passes_with_accuracy", 100),
     "duel_win_pct": ("duels_with_won_data", 20),
     "dribble_success_pct": ("dribbles_with_success_data", 10),
+    "aerial_win_pct": ("aerials_with_won_data", 20),
     "average_rating": ("matches_with_rating", 5),
 }
 
@@ -64,41 +72,47 @@ RATIO_COVERAGE = {
 # ranks among those players. The keys of "weights" are fixed SQL expressions
 # over the season columns.
 PASSES_PER_90 = "passes_attempted * 90.0 / minutes"
+# Defensive counts scaled to an opponent with half the ball, so players on
+# teams that defend more are not ranked above those on teams that dominate.
+TACKLES_ADJUSTED = "tackles_possession_adjusted_per_90"
+INTERCEPTIONS_ADJUSTED = "interceptions_possession_adjusted_per_90"
 ROLE_PROFILES: dict[str, dict[str, Any]] = {
     "defensive_mid": {
         "positions": ["Defensive Midfield"],
-        "weights": {"tackles_per_90": 0.25, "interceptions_per_90": 0.25,
-                    "duel_win_pct": 0.20, "pass_accuracy_pct": 0.15,
-                    PASSES_PER_90: 0.15},
+        "weights": {TACKLES_ADJUSTED: 0.20, INTERCEPTIONS_ADJUSTED: 0.20,
+                    "duel_win_pct": 0.25, "ball_recoveries_per_90": 0.15,
+                    "pass_accuracy_pct": 0.10, PASSES_PER_90: 0.10},
     },
     "central_mid": {
         "positions": ["Central Midfield"],
-        "weights": {"key_passes_per_90": 0.20, PASSES_PER_90: 0.20,
-                    "pass_accuracy_pct": 0.15, "tackles_per_90": 0.15,
-                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15},
+        "weights": {"key_passes_per_90": 0.15, "passes_final_third_per_90": 0.15,
+                    PASSES_PER_90: 0.15, "pass_accuracy_pct": 0.15,
+                    TACKLES_ADJUSTED: 0.10, INTERCEPTIONS_ADJUSTED: 0.10,
+                    "ball_recoveries_per_90": 0.10, "duel_win_pct": 0.10},
     },
     "creative_mid": {
         "positions": ["Attacking Midfield"],
-        "weights": {"key_passes_per_90": 0.35, "assists_per_90": 0.25,
-                    "goals_per_90": 0.15, "pass_accuracy_pct": 0.15,
-                    "dribble_success_pct": 0.10},
+        "weights": {"key_passes_per_90": 0.30, "big_chances_created_per_90": 0.20,
+                    "assists_per_90": 0.20, "goals_per_90": 0.15,
+                    "dribble_success_pct": 0.15},
     },
     "winger": {
         "positions": ["Left Wing", "Right Wing", "Left Midfield", "Right Midfield"],
-        "weights": {"goals_per_90": 0.25, "key_passes_per_90": 0.25,
-                    "assists_per_90": 0.20, "shots_per_90": 0.15,
-                    "dribble_success_pct": 0.15},
+        "weights": {"goals_per_90": 0.25, "key_passes_per_90": 0.20,
+                    "big_chances_created_per_90": 0.15, "assists_per_90": 0.15,
+                    "dribble_success_pct": 0.15, "shots_per_90": 0.10},
     },
     "centre_back": {
         "positions": ["Centre Back"],
-        "weights": {"duel_win_pct": 0.30, "interceptions_per_90": 0.25,
-                    "tackles_per_90": 0.20, "pass_accuracy_pct": 0.15,
+        "weights": {"duel_win_pct": 0.20, "aerial_win_pct": 0.20,
+                    INTERCEPTIONS_ADJUSTED: 0.20, TACKLES_ADJUSTED: 0.10,
+                    "clearances_per_90": 0.10, "pass_accuracy_pct": 0.10,
                     PASSES_PER_90: 0.10},
     },
     "full_back": {
         "positions": ["Left Back", "Right Back"],
-        "weights": {"tackles_per_90": 0.20, "key_passes_per_90": 0.20,
-                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15,
+        "weights": {TACKLES_ADJUSTED: 0.20, "key_passes_per_90": 0.20,
+                    INTERCEPTIONS_ADJUSTED: 0.15, "duel_win_pct": 0.15,
                     "pass_accuracy_pct": 0.15, "dribble_success_pct": 0.15},
     },
     "striker": {
@@ -356,9 +370,11 @@ with a sensible minute floor.
 For comparing explicitly named players, retrieve both players' season summaries.
 For open-ended recruitment or "who should we sign" questions, use shortlist with the
 closest role and describe role_score as a statistical fit, not a verdict.
-Tackles, interceptions, and other defensive counts are per 90 minutes and are
-not adjusted for possession, so players on teams with less of the ball tend
-to post higher numbers; say so when ranking on them.
+Raw tackles and interceptions per 90 favour players on teams with less of the
+ball. The possession_adjusted_per_90 versions scale each match to an opponent
+with half the ball, using the team's possession for the whole match. Role
+scores use them. Prefer them when comparing players across teams, and give
+average_team_possession_pct as context.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
 give context for follow-up questions; retrieve data again before answering.
@@ -368,6 +384,19 @@ Explain that these are statistical indicators rather than observed scout notes.
 For each numerical claim, cite the season row as [player_id:league_id:season].
 If information is absent or coverage is incomplete, say so. Keep the answer
 concise and report the season and league for comparisons."""
+
+
+def cited_rows(text: str) -> set[str]:
+    """Season rows cited in an answer, as player_id:league_id:season.
+
+    Accepts the forms a model drifts into: spaces around the colons, and
+    several rows inside one pair of brackets.
+    """
+    return {
+        ":".join(row)
+        for group in re.findall(r"\[([^\[\]]*)\]", text)
+        for row in re.findall(r"(\d+)\s*:\s*(\d+)\s*:\s*(\d+)", group)
+    }
 
 
 class ScoutAssistant:
@@ -430,13 +459,15 @@ class ScoutAssistant:
         # Rows cited in earlier answers may be cited again in a follow-up.
         cited_before = {
             citation for turn in previous if turn["role"] == "assistant"
-            for citation in re.findall(r"\[(\d+:\d+:\d+)\]", turn["content"])
+            for citation in cited_rows(turn["content"])
         }
         sources: dict[str, dict[str, Any]] = {}
         found_candidates = False
         call_count = 0
-        # Allow a final answer after six sequential lookups, as well as parallel calls.
-        for _ in range(MAX_TOOL_CALLS + 1):
+        corrected = False
+        # Allow a final answer after six sequential lookups, as well as parallel
+        # calls, and one more turn to correct an answer's citations.
+        for _ in range(MAX_TOOL_CALLS + 2):
             response = self._response(history, call_count)
             calls = [item for item in response.output if item.type == "function_call"]
             if not calls:
@@ -450,9 +481,27 @@ class ScoutAssistant:
                                       "Try searching by surname or check the available season coverage.",
                             "sources": []}
                 if sources:
-                    citations = set(re.findall(r"\[(\d+:\d+:\d+)\]", answer))
-                    if not citations or not citations <= sources.keys() | cited_before:
-                        raise RuntimeError("Assistant did not cite retrieved season rows")
+                    citations = cited_rows(answer)
+                    unknown = sorted(citations - (sources.keys() | cited_before))
+                    if not citations or unknown:
+                        problem = (f"it cited rows that were not retrieved: {', '.join(unknown)}"
+                                   if unknown else "it cited no season row")
+                        # The rejected text is the only evidence of what went wrong.
+                        LOGGER.warning("Scout answer rejected (%s): retrieved=%s answer=%r",
+                                       problem, sorted(sources), answer[:3000])
+                        if corrected:
+                            raise RuntimeError(
+                                "Assistant did not cite retrieved season rows: " + problem)
+                        corrected = True
+                        history.append({"role": "assistant", "content": answer})
+                        history.append({"role": "user", "content": (
+                            f"That answer was not shown to the user because {problem}. Write it "
+                            "again. Cite each figure as [player_id:league_id:season], one row per "
+                            "pair of brackets, using only these retrieved rows: "
+                            + ", ".join(f"[{row}]" for row in sorted(sources)) + ". "
+                            "To use a player whose rows are not listed, retrieve them first. "
+                            "Give no figures for a player without a retrieved row.")})
+                        continue
                 return {"answer": answer, "sources": list(sources.values())}
             if call_count + len(calls) > MAX_TOOL_CALLS:
                 raise RuntimeError("Assistant exceeded the data lookup limit")

@@ -24,7 +24,8 @@ POSITIONS = {24: "G", 25: "D", 26: "M", 27: "F"}
 BENCH = 12  # lineup type of a player named as a substitute
 MAIN_REFEREE = 6
 FIXTURE_INCLUDES = "round;state;venue;participants;scores;referees.referee"
-LINEUP_INCLUDES = "participants;lineups.details.type;lineups.detailedPosition"
+LINEUP_INCLUDES = "participants;statistics.type;lineups.details.type;lineups.detailedPosition"
+POSSESSION = "ball-possession"  # team statistic, a percentage
 SQUAD_INCLUDES = "player.nationality;player.position;player.detailedPosition"
 
 # CSV column -> Sportmonks statistic code, for whole-number counts.
@@ -56,14 +57,49 @@ COUNTS = {
     "penalty_scored": "penalties-scored",
     "penalty_missed": "penalties-missed",
     "penalty_saved": "penalties-saved",
+    # Columns below have no API-Football counterpart.
+    "shots_off": "shots-off-target",
+    "shots_blocked": "shots-blocked",  # the player's own shots that were blocked
+    "shots_woodwork": "hit-woodwork",
+    "own_goals": "own-goals",
+    "big_chances_created": "big-chances-created",
+    "big_chances_missed": "big-chances-missed",
+    "passes_final_third": "passes-in-final-third",
+    "crosses_total": "total-crosses",
+    "crosses_accurate": "accurate-crosses",
+    "long_balls_total": "long-balls",
+    "long_balls_accurate": "long-balls-won",
+    "through_balls_total": "through-balls",
+    "through_balls_accurate": "through-balls-won",
+    "touches": "touches",
+    "possession_lost": "possession-lost",
+    "dispossessed": "dispossessed",
+    "tackles_won": "tackles-won",
+    "clearances": "clearances",
+    "ball_recoveries": "ball-recovery",
+    "aerials_won": "aeriels-won",  # Sportmonks' spelling
+    "aerials_lost": "aeriels-lost",
+    "errors_leading_to_shot": "error-lead-to-shot",
+    "errors_leading_to_goal": "error-lead-to-goal",
+    "saves_inside_box": "saves-insidebox",
+    "goalkeeper_goals_conceded": "goalkeeper-goals-conceded",
+    "goalkeeper_punches": "punches",
+    "goalkeeper_high_claims": "good-high-claim",
 }
-GOALKEEPER_ONLY = {"goals_saves", "penalty_saved"}
+GOALKEEPER_ONLY = {
+    "goals_saves", "penalty_saved", "saves_inside_box", "goalkeeper_goals_conceded",
+    "goalkeeper_punches", "goalkeeper_high_claims",
+}
 # Whole -> part. Sportmonks sometimes reports a part without its whole.
 PARTS = {
     "shots_total": "shots-on-target",
     "duels_total": "duels-won",
     "dribbles_attempts": "successful-dribbles",
     "passes_total": "accurate-passes",
+    "crosses_total": "accurate-crosses",
+    "long_balls_total": "long-balls-won",
+    "through_balls_total": "through-balls-won",
+    "tackles_total": "tackles-won",
 }
 
 _session = requests.Session()
@@ -97,7 +133,8 @@ def api_get(path, params=None, max_retries=3):
                 r.raise_for_status()
             backoff = min(2 ** attempt, 30)
             if r.status_code == 429:
-                backoff = max(backoff, _seconds_until_reset(r))
+                # Sportmonks does not always say when the allowance resets.
+                backoff = max(backoff, _seconds_until_reset(r) or 300)
             print(f"{path} returned HTTP {r.status_code}; retrying in {backoff:g}s")
             time.sleep(backoff)
             continue
@@ -199,6 +236,10 @@ def to_player_stats(row):
     detailed = any("passes" in stats for stats in values)
     teams = {team["id"]: {"team": {"id": team["id"], "name": team["name"]}, "players": []}
              for team in row.get("participants") or []}
+    # Each team's share of possession over the whole match, for adjusting
+    # defensive counts. It is the same for every player on the team.
+    possession = {stat["participant_id"]: stat["data"].get("value")
+                  for stat in row.get("statistics") or [] if stat["type"]["code"] == POSSESSION}
     for entry, stats in zip(lineups, values):
         # Sportmonks has no ID for a few players. A row needs one for its key.
         if entry.get("player_id") is None:
@@ -216,6 +257,7 @@ def to_player_stats(row):
             "games_rating": stats.get("rating"),
             "games_captain": bool(stats.get("captain")),
             "games_substitute": entry.get("type_id") == BENCH,
+            "team_possession_pct": possession.get(entry["team_id"]),
         }
         for column, code in COUNTS.items():
             value = stats.get(code)
