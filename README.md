@@ -1,71 +1,51 @@
 ## Football Data Project
 
-### Five league matchday sync
+Player statistics for five European leagues, from Sportmonks to a scouting
+assistant. Two local scripts fetch the data and write CSV files to S3. A
+Databricks job loads them into bronze and silver tables, a SQL file builds the
+gold summaries, and the scout API and chat answer questions from gold.
 
-`sync_matchday_stats.py` fetches Premier League (39), La Liga (140), Bundesliga
-(78), Serie A (135), and Ligue 1 (61) for `FOOTBALL_SEASON` (default 2026)
-and the two preceding seasons. Set `FOOTBALL_HISTORY_SEASONS` to change
-the history depth (default 2). With the defaults, it syncs 2024 through 2026.
-It writes one CSV per matchday under `AWS_S3_PREFIX`, for example
-`league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv` and
-`league_140/season_2026/ESP_LA_LIGA_MATCHDAY_01.csv`. For rounds without a
-number, the suffix uses the round name, such as
-`GER_BUNDESLIGA_MATCHDAY_RELEGATION_ROUND.csv`. Each row retains
-`league_id`, `season`, and `fixture_id`. A player's appearances remain separate
-by league, season, fixture, team, and player ID, including after transfers.
-State lives in
-`state/processed_fixtures.json`, keyed by `league_id:season:fixture_id`.
+### Configuration
 
-The first run with this layout refetches completed fixtures because prior state
-entries do not represent matchday files. Existing fixture and older matchday
-objects are left in S3. The Databricks reader uses only the
-current nested matchday layout; run the sync to completion before relying on it.
-The Databricks merge key also includes league and season. Use a fresh Auto Loader
-checkpoint and schema location when switching an existing stream to this layout.
-
-### Why the project moved to Sportmonks
-
-The pipeline was built on API-Football. Two limits of that data led to the
-move.
-
-- **Positions.** API-Football labels a player only as goalkeeper, defender,
-  midfielder, or forward. The scout had to guess a role such as defensive
-  midfielder from statistics. Sportmonks records a detailed position, such as
-  Defensive Midfield, on each player profile.
-- **Inflated per 90 rates.** API-Football leaves a statistic blank when it is
-  zero. The gold summaries treat a blank as not recorded and leave that
-  match's minutes out of the rate, so a rate is computed only over the matches
-  where the player registered the statistic. For 2025/26 the API-Football
-  gold shows Erling Haaland at 1.42 goals per 90 and Declan Rice at 1.39,
-  where goals divided by minutes gives 0.82 and 0.12. Tackles, interceptions,
-  and other counts are overstated in the same way, by less. The Sportmonks
-  sync writes those zeros, so its gold rates are correct.
-
-The API-Football gold tables keep this flaw. They are left as they are and
-should not be used for per 90 comparisons. Minutes, appearances, and goals
-agree between the two providers.
-
-### Sportmonks as the data provider
-
-Both sync scripts can read from Sportmonks instead of API-Football. Set these
-in `.env`:
+The sync scripts read these from `.env` beside them or from the environment:
 
 | Variable | Purpose |
 | --- | --- |
-| `FOOTBALL_DATA_PROVIDER` | `sportmonks`, or `api_football` (the default) |
 | `SPORTMONKS_API_TOKEN` | Sportmonks API token |
-| `SPORTMONKS_S3_PREFIX` | S3 prefix for Sportmonks files, required when the provider is `sportmonks` |
+| `SPORTMONKS_S3_PREFIX` | S3 prefix for the files, `sportmonks/football-matchday-stats` |
+| `AWS_S3_BUCKET` | S3 bucket |
+| `AWS_REGION` | Optional AWS region |
+| `FOOTBALL_SEASON` | Latest season to sync, by starting year (default 2026) |
+| `FOOTBALL_HISTORY_SEASONS` | Earlier seasons to sync as well (default 2) |
+| `PLAYER_PROFILE_CACHE_HOURS` | How long a profile scan is reused (default 168) |
 
-`sportmonks.py` converts Sportmonks responses to the API-Football layout, so
-the CSV files keep their names and columns. League IDs (39, 140, 78, 135, 61)
-and seasons (2025 for 2025/26) are unchanged. Fixture, team, and player IDs
-are Sportmonks IDs, so the two providers' rows must never share a bronze
-table. For that reason Sportmonks files go to their own S3 prefix, with state
-in `state/sportmonks/` and local copies in `output/sportmonks/`. To cut over,
-load them into empty bronze tables with new Auto Loader checkpoint and schema
-locations, then rebuild silver and gold.
+AWS credentials come from the usual boto3 provider chain.
 
-Differences from API-Football data:
+### Five league matchday sync
+
+`sync_matchday_stats.py` fetches the Premier League (39), La Liga (140),
+Bundesliga (78), Serie A (135), and Ligue 1 (61) for `FOOTBALL_SEASON` and the
+preceding `FOOTBALL_HISTORY_SEASONS`. With the defaults, it syncs 2024 through
+2026. The league IDs are the project's own; `sportmonks.py` maps them to
+Sportmonks league and season IDs. Fixture, team, and player IDs are
+Sportmonks IDs.
+
+It writes one CSV per matchday under `SPORTMONKS_S3_PREFIX`, for example
+`league_39/season_2026/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv`. For rounds without
+a number, the suffix uses the round name, such as
+`GER_BUNDESLIGA_MATCHDAY_RELEGATION_ROUND.csv`. Each file holds one row per
+player per fixture. A player's appearances remain separate by league, season,
+fixture, team, and player ID, including after transfers. Local copies go to
+`output/sportmonks/`. State lives in `state/sportmonks/processed_fixtures.json`,
+keyed by `league_id:season:fixture_id`.
+
+A matchday is fetched when it has a finished fixture the state does not hold,
+and again while any of its fixtures kicked off less than 12 hours ago, so
+corrections arrive. A matchday file is always replaced as a whole. Fixtures
+that were abandoned or awarded are not treated as finished and have no player
+rows.
+
+How Sportmonks statistics become rows:
 
 - Sportmonks leaves a statistic out when it is zero. A count missing for a
   player who played is written as 0 when the fixture has detailed statistics.
@@ -74,151 +54,133 @@ Differences from API-Football data:
   stays blank when Sportmonks reports only its part.
 - Sportmonks has no player ID for a few lineup entries. The sync skips them
   and prints the fixture and name.
-- Matchday rows gain `games_detailed_position` and `games_formation_field`.
-  The detailed position is the slot in the starting formation, such as
-  Central Midfield. It is blank for substitutes and rarely says Defensive
-  Midfield.
-- Profiles gain `position` and `detailed_position`, the player's usual role,
-  such as Defensive Midfield. Profiles come from each team's season squad.
-  `birth_place`, `birth_country`, and `injured` are blank.
+- `games_position` is G, D, M, or F. `games_detailed_position` is the slot in
+  the starting formation, such as Central Midfield. It is blank for
+  substitutes and rarely says Defensive Midfield, so use the profile's
+  `detailed_position` for a player's role.
+- `passes_accuracy` is the number of accurate passes, not a percentage.
 - A second yellow card adds one to `cards_red`.
 - `tackles_blocks` is Sportmonks' blocked shots.
 
 One fixture's statistics take one request, and a league season's fixture list
 takes eight. Sportmonks allows a set number of requests per entity per hour.
-When that runs out, the sync waits for the reset and continues.
+When that runs out, the sync waits for the reset and continues. Connection
+failures and HTTP 429 or 5xx responses are retried up to three times.
+
+`com.footballdata.matchdaysync.plist` runs the sync every three hours on
+macOS.
+
+### Fixtures
+
+Each sync also writes the full fixture list for every league and season to
+`reference/fixtures/league_39_season_2026.csv` (and so on) under
+`SPORTMONKS_S3_PREFIX`. Each row has the kickoff time in UTC, status, round,
+referee, venue, home and away teams, and the full-time and half-time score.
+Unplayed fixtures are included with blank scores. A file is uploaded again
+only when its content changes.
+
+Matchday statistics join to fixtures on `league_id`, `season`, and
+`fixture_id`. A player's team is at home when `team_id` equals `home_team_id`.
+
+### Player profiles
+
+Run `python sync_player_profiles.py` to collect profiles for the same leagues
+and seasons. It reads every team's squad in each league season and keeps one
+profile per player ID, the latest season winning. A completed scan is cached
+for seven days in `state/sportmonks/player_profiles.json`; set
+`PLAYER_PROFILE_CACHE_HOURS=0` to force a new scan.
+
+The script uploads `reference/player_profiles/player_profiles.csv` under
+`SPORTMONKS_S3_PREFIX`. Profiles include birth date, nationality, height,
+weight, `position`, `detailed_position` (the player's usual role, such as
+Defensive Midfield), and `fetched_at`. Age is computed from the birth date on
+the day of the fetch, not a historical age for `source_season`. `birth_place`,
+`birth_country`, and `injured` are blank. Matchday statistics join to profiles
+by `player_id`.
 
 ### Deploying the Databricks job
 
-`databricks.yml` and `resources/matchday_ingest.job.yml` define the MatchDay
-Ingest job as a Databricks Asset Bundle. Deploying uploads the scripts and the
-silver notebook and creates or updates the job, so the job always runs the
-code in the deployed commit.
+`databricks.yml` and `resources/sportmonks_ingest.job.yml` define the
+Sportmonks Ingest job as a Databricks Asset Bundle. Deploying uploads the
+scripts and the silver notebook and creates or updates the job, so the job
+always runs the code in the deployed commit.
 
 ```bash
 databricks bundle validate
 databricks bundle deploy            # dev, the default target
-databricks bundle run matchday_ingest
+databricks bundle run sportmonks_ingest
 databricks bundle deploy -t prod
 ```
 
 The job copies S3 files into the volumes, then loads player profiles,
 fixtures, and matchday stats independently, then runs the silver notebook.
-Each task receives the catalog and schema as parameters.
-
-| Target | Job name | Schema | Schedule |
-| --- | --- | --- | --- |
-| `dev` | `[dev <user>] MatchDay Ingest` | `dev_<user>_football_data_project`, created by the bundle with its four volumes | Paused |
-| `prod` | `MatchDay Ingest` | `football_data_project`, existing and not managed by the bundle | Daily |
-
-`resources/sportmonks_ingest.job.yml` defines a second job, Sportmonks Ingest,
-for files written by the Sportmonks sync. It runs the same scripts and silver
-notebook against its own schema, so its bronze and silver tables are separate
-from the API-Football ones. It copies from the S3 prefix
-`sportmonks/football-matchday-stats`; set `SPORTMONKS_S3_PREFIX` to that value
-for the sync.
+Each task receives the catalog and schema as parameters. The bundle creates
+the schema and its four volumes in both targets.
 
 | Target | Job name | Schema | Schedule |
 | --- | --- | --- | --- |
 | `dev` | `[dev <user>] Sportmonks Ingest` | `dev_<user>_football_data_project_sportmonks` | Paused |
 | `prod` | `Sportmonks Ingest` | `football_data_project_sportmonks` | Daily |
 
-The bundle creates the Sportmonks schema and its four volumes in both targets.
-Run it with `databricks bundle run sportmonks_ingest`.
+To reprocess all of bronze into silver, run the job with the `silver` task's
+`full_refresh` parameter set to `true`. `databricks_gold_player_summaries.sql`
+is not part of the bundle; see Gold player summaries.
 
-The first `prod` deploy creates a new job beside any job made by hand in the
-UI. To have the bundle take over an existing job instead, run
-`databricks bundle deployment bind matchday_ingest <job id> -t prod` before
-deploying. To reprocess all of bronze into silver, run the job with the
-`silver` task's `full_refresh` parameter set to `true`.
-`databricks_gold_player_summaries.sql` is not part of the bundle. Its table
-names have no schema, so select the pipeline's schema before running it, for
-example `USE workspace.football_data_project_sportmonks`. It reads the
-profile's `detailed_position`, so the profile table must have been loaded by
-the current `sync_player_profiles.py`.
+The job tasks:
 
-### Copying S3 files into Databricks volumes
+- **`databricks_volume_sync.py`** copies matchday files to
+  `football_data/<season>/`, fixture files to `football_data/fixtures/`, and
+  the profile file to `player_profiles_data/`. It records the S3 ETag of each
+  copied file in `_checkpoints/s3_volume_sync/copied_etags.json` and downloads
+  a file again only when its ETag has changed or its copy is missing. Delete
+  the manifest to force a full copy.
+- **`databricks_matchday_stream.py`** upserts `bronze_matchday_stats` by
+  league, season, fixture, team, and player. It reads only files named
+  `*_MATCHDAY_*.csv` and fails if a key column is null.
+- **`databricks_fixtures.py`** upserts `bronze_fixtures` by league, season,
+  and fixture ID.
+- **`databricks_player_profiles.py`** upserts `bronze_player_profiles` by
+  `player_id`.
 
-Run `databricks_volume_sync.py` in Databricks before the bronze loaders. It
-copies matchday files to `football_data/<season>/`, fixture files to
-`football_data/fixtures/`, and the profile file to `player_profiles_data/`.
-The matchday Auto Loader reads only files named `*_MATCHDAY_*.csv`, so it
-ignores the fixtures folder. It records
-the S3 ETag of each copied file in
-`_checkpoints/s3_volume_sync/copied_etags.json` and downloads a file again
-only when its ETag has changed or its copy is missing. The first run copies
-everything. Delete the manifest to force a full copy.
-
-### Fixtures
-
-Each sync also writes the full fixture list for every league and season to
-`reference/fixtures/league_39_season_2026.csv` (and so on) under
-`AWS_S3_PREFIX`. It needs no extra API requests. Each row has the kickoff time
-in UTC, status, round, referee, venue, home and away teams, and the full-time
-and half-time score. Unplayed fixtures are included with blank scores. A file
-is uploaded again only when its content changes.
-
-In Databricks, run `databricks_volume_sync.py` to copy these files into the
-`fixtures` folder of the `football_data` volume, then run `databricks_fixtures.py` to upsert
-`bronze_fixtures` by league, season, and fixture ID. Use its own Auto Loader schema and checkpoint locations. Matchday
-statistics join to fixtures on `league_id`, `season`, and `fixture_id`; a
-player's team is at home when `team_id` equals `home_team_id`.
+Each loader has its own Auto Loader schema and checkpoint locations.
 
 ### Silver layer
 
-Run the silver notebook, `Silver Layer Matchday Stats By League.ipynb`, after
-each bronze load. It maintains one table for all five leagues,
-`silver_matchday_stats`, clustered by league and season. Each run merges only
-the bronze rows ingested since the previous run, so corrections update rows in
-place. Set the notebook's `full_refresh` parameter to `true` to reprocess every
-bronze row, for example after changing a cleaning rule. Its `catalog` and
-`schema` parameters select the schema to read and write.
+The silver notebook, `Silver Layer Matchday Stats By League.ipynb`, maintains
+one table for all five leagues, `silver_matchday_stats`, clustered by league
+and season. Each run merges only the bronze rows ingested since the previous
+run, so corrections update rows in place. Set the notebook's `full_refresh`
+parameter to `true` to reprocess every bronze row, for example after changing
+a cleaning rule. Its `catalog` and `schema` parameters select the schema to
+read and write.
 
-Silver keeps one row per league, season, fixture, team, and player. Whole-number
-statistics are stored as integers. A value outside its valid range (a negative
-count, more than 130 minutes, a rating above 10) is replaced with null, and
-the row's `quality_issues` array records the rule, for example
+Silver keeps one row per league, season, fixture, team, and player.
+Whole-number statistics are stored as integers. A value outside its valid
+range (a negative count, more than 130 minutes, a rating above 10) is replaced
+with null, and the row's `quality_issues` array records the rule, for example
 `games_rating_out_of_range`. A part that exceeds its whole, such as more shots
-on target than shots or more accurate passes than passes, is recorded in `quality_issues` but left as
-reported. The last notebook cell prints the count of each issue and fails if
-any key is duplicated.
+on target than shots, is recorded in `quality_issues` but left as reported.
+Sportmonks reports a few such rows. The last notebook cell prints the count of
+each issue and fails if any key is duplicated.
 
 When `bronze_fixtures` exists, the notebook also maintains `silver_fixtures`
 with a typed `kickoff_utc`, `match_date`, `is_finished`, and `result` (`H`,
 `D`, or `A`).
 
-This layout replaces the five per-league tables named
-`silver_<league>_matchday_stats`. The first run builds `silver_matchday_stats`
-from all of bronze. Then run `databricks_gold_player_summaries.sql` again so
-gold reads the new table. After that the five old tables can be dropped.
-
-### Player profiles
-
-Run `python sync_player_profiles.py` to collect profiles for the same five
-leagues and three seasons. The script reads every paginated `/players` response
-and keeps one profile per player ID. A completed scan is cached for seven days
-in `state/player_profiles.json`; set `PLAYER_PROFILE_CACHE_HOURS=0` to force a
-new scan. Connection failures and HTTP 429 or 5xx responses are retried up to
-three times.
-
-The script uploads `reference/player_profiles/player_profiles.csv` under
-`AWS_S3_PREFIX`. Profiles include age, birth date, nationality, and
-`fetched_at`. Age is the value reported when the profile was fetched, not a
-historical age for `source_season`. Matchday statistics remain in their
-existing files and join to profiles by `player_id`.
-
-In Databricks, run `databricks_player_profiles.py` to upsert
-`bronze_player_profiles` by `player_id`. Use its own Auto Loader schema and
-checkpoint locations, separate from matchday statistics.
-
 ### Gold player summaries
 
-Run the silver notebook after the bronze matchday load. Run
-`databricks_player_profiles.py` so the profile table exists. Then execute `databricks_gold_player_summaries.sql` in a
-Databricks SQL editor using a Pro or Serverless SQL warehouse. Its first
-statement creates `gold_player_season_summary`, one row per player, league,
-and season. Its second creates `gold_player_observed_summary`, one row per
-player across only the league seasons present in the data.
+After the job has run, execute `databricks_gold_player_summaries.sql` in a
+Databricks SQL editor using a Pro or Serverless SQL warehouse. Its table names
+have no schema, so select the schema first:
+
+```sql
+USE workspace.football_data_project_sportmonks;
+```
+
+Its first statement creates `gold_player_season_summary`, one row per player,
+league, and season. Its second creates `gold_player_observed_summary`, one row
+per player across only the league seasons present in the data. They need to be
+created once per schema.
 
 The gold materialized view uses `TRIGGER ON UPDATE` to refresh after the
 silver table or the profile table changes. The silver notebook merges changed
@@ -226,33 +188,32 @@ rows and enables row tracking, so Databricks can refresh the view
 incrementally where the query allows it. This is a refreshable serving table,
 not an event stream.
 
-The season summary relies on silver holding one row per league, season,
-fixture, team, and player. It includes teams, appearances, starts, minutes,
-position, totals, per 90 rates, shooting and duel percentages, pass accuracy
-(`accurate_passes` over `passes_with_accuracy`, counting matches that report
-both), and the latest available profile fields. It also has
-offsides, blocks, times dribbled past, fouls drawn and committed, and
-penalties won, committed, scored, missed, and saved. `non_penalty_goals` uses
-only matches that report both goals and penalties scored. `save_pct` is saves
-divided by saves plus goals conceded, counted in matches played as goalkeeper. Percentages use matches where both
-parts of the ratio are present. Each per 90 rate uses minutes from matches
-where that stat is present. The corresponding `*_observed_minutes` and
-coverage columns show how much data supports a rate. An all missing stat
-remains null. Profile age is age when fetched, not age during that season.
-The observed summary is not a career total outside the loaded leagues and
-seasons.
+The season summary includes teams, appearances, starts, minutes, position,
+`detailed_position` from the profile, totals, per 90 rates, shooting and duel
+percentages, pass accuracy (`accurate_passes` over `passes_with_accuracy`,
+counting matches that report both), and the latest available profile fields.
+It also has offsides, blocks, times dribbled past, fouls drawn and committed,
+and penalties won, committed, scored, missed, and saved. `non_penalty_goals`
+uses only matches that report both goals and penalties scored. `save_pct` is
+saves divided by saves plus goals conceded, counted in matches played as
+goalkeeper. Percentages use matches where both parts of the ratio are present.
+Each per 90 rate uses minutes from matches where that stat is present. The
+corresponding `*_observed_minutes` and coverage columns show how much data
+supports a rate. An all missing stat remains null. Profile age is age when
+fetched, not age during that season. The observed summary is not a career
+total outside the loaded leagues and seasons.
 
 Check the result in Databricks SQL:
 
 ```sql
 SELECT player_id, league_id, season, COUNT(*) AS rows_per_key
-FROM workspace.football_data_project.gold_player_season_summary
+FROM workspace.football_data_project_sportmonks.gold_player_season_summary
 GROUP BY player_id, league_id, season
 HAVING COUNT(*) > 1;
 
 SELECT player_id, player_name, league_name, season, appearances, minutes,
        goals, goals_observed_minutes, goals_per_90, profile_age, nationality
-FROM workspace.football_data_project.gold_player_season_summary
+FROM workspace.football_data_project_sportmonks.gold_player_season_summary
 WHERE minutes >= 450
 ORDER BY goals_per_90 DESC
 LIMIT 20;
@@ -261,6 +222,32 @@ LIMIT 20;
 The first query should return no rows. `silver_as_of` shows the latest silver
 processing time in each summary. It does not guarantee that every fixture in
 the source API has been ingested.
+
+### History: API-Football
+
+The pipeline was first built on API-Football and moved to Sportmonks in
+October 2026. Two limits of the API-Football data led to the move.
+
+- **Positions.** API-Football labels a player only as goalkeeper, defender,
+  midfielder, or forward. The scout had to guess a role such as defensive
+  midfielder from statistics. Sportmonks records a detailed position, such as
+  Defensive Midfield, on each player profile.
+- **Inflated per 90 rates.** API-Football leaves a statistic blank when it is
+  zero. The gold summaries treat a blank as not recorded and leave that
+  match's minutes out of the rate, so a rate was computed only over the
+  matches where the player registered the statistic. For 2025/26 the
+  API-Football gold shows Erling Haaland at 1.42 goals per 90 and Declan Rice
+  at 1.39, where goals divided by minutes gives 0.82 and 0.12. Tackles,
+  interceptions, and other counts are overstated in the same way, by less.
+  The Sportmonks sync writes those zeros, so its gold rates are correct.
+
+The API-Football client and its Databricks job have been removed. Its tables
+remain in `workspace.football_data_project` and its files under the
+`football-matchday-stats` S3 prefix. Nothing updates them, and the gold tables
+there keep the inflated rates, so do not use them for per 90 comparisons.
+Minutes, appearances, and goals agree between the two providers. The CSV
+column names and the nested layout that `sportmonks.py` produces come from
+API-Football.
 
 ### Scout API
 

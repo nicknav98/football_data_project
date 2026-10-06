@@ -184,7 +184,7 @@ class GoldRepository:
         args = SearchArgs(name=name.strip(), limit=limit)
         filters = ["contains(lower(player_name), lower(?))"]
         parameters: list[Any] = [args.name]
-        # API-Football names often use initials, such as J. Garner and R. Lavia.
+        # A query may use an initial where the stored name is full, or the reverse.
         variants = [args.name.lower().replace(".", "").replace(" ", "")]
         parts = args.name.split()
         if len(parts) > 1:

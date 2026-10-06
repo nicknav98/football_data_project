@@ -1,7 +1,5 @@
-# The Sportmonks pipeline. It runs the same scripts and silver notebook as
-# MatchDay Ingest, against its own schema and S3 prefix. Sportmonks has its
-# own fixture, team, and player IDs, so its rows never share a table with
-# API-Football's.
+# The football data pipeline: copy the Sportmonks files from S3, load bronze,
+# then build silver.
 resources:
   # The bundle owns this schema and its volumes in every target. Development
   # mode prefixes the schema name, which var.sportmonks_schema accounts for.

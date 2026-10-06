@@ -1,8 +1,11 @@
 """Checks that Sportmonks responses become the layouts the sync scripts read."""
 
 from datetime import date
+import os
 import unittest
 from unittest.mock import patch
+
+import requests
 
 import sportmonks
 import sync_matchday_stats as sync
@@ -50,6 +53,53 @@ FIXTURE = {
         lineup(12, 2, 27, [], bench=True),
     ],
 }
+
+
+class Response:
+    def __init__(self, status_code, payload=None):
+        self.status_code, self.payload, self.headers = status_code, payload, {}
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise requests.HTTPError(str(self.status_code))
+
+    def json(self):
+        return self.payload
+
+
+@patch.dict(os.environ, {"SPORTMONKS_API_TOKEN": "token"})
+class ApiTests(unittest.TestCase):
+    def test_api_retries_disconnect_and_server_error(self):
+        with patch.object(sportmonks._session, "get", side_effect=[
+                requests.ConnectionError("remote closed"), Response(503), Response(200, {"data": []}),
+        ]) as get, patch.object(sportmonks.time, "sleep") as sleep:
+            payload = sportmonks.api_get("/fixtures")
+        self.assertEqual(payload, {"data": []})
+        self.assertEqual(get.call_count, 3)
+        self.assertTrue(sleep.called)
+
+    def test_api_raises_after_retry_limit(self):
+        failing = patch.object(sportmonks._session, "get",
+                               side_effect=requests.ConnectionError("remote closed"))
+        with failing as get, patch.object(sportmonks.time, "sleep"):
+            with self.assertRaises(requests.ConnectionError):
+                sportmonks.api_get("/fixtures", max_retries=2)
+        self.assertEqual(get.call_count, 3)
+
+    def test_api_waits_for_the_reset_when_the_hourly_limit_runs_out(self):
+        spent = {"data": [], "rate_limit": {"remaining": 0, "resets_in_seconds": 1200,
+                                            "requested_entity": "Fixture"}}
+        with patch.object(sportmonks._session, "get", return_value=Response(200, spent)):
+            with patch.object(sportmonks.time, "sleep") as sleep:
+                sportmonks.api_get("/fixtures")
+        sleep.assert_called_with(1200)
+
+    def test_api_reports_a_response_without_data(self):
+        denied = Response(200, {"message": "No access"})
+        with patch.object(sportmonks._session, "get", return_value=denied):
+            with patch.object(sportmonks.time, "sleep"):
+                with self.assertRaisesRegex(ValueError, "No access"):
+                    sportmonks.api_get("/fixtures")
 
 
 class FixtureTests(unittest.TestCase):

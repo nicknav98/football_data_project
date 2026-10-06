@@ -74,7 +74,7 @@ if __name__ == "__main__":
     # The job passes --catalog and --schema; the defaults are the production schema.
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", default="workspace")
-    parser.add_argument("--schema", default="football_data_project")
+    parser.add_argument("--schema", default="football_data_project_sportmonks")
     args, _ = parser.parse_known_args()
     volumes = f"/Volumes/{args.catalog}/{args.schema}"
 

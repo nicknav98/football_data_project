@@ -1,9 +1,9 @@
 """Copy new or changed S3 CSVs into the volumes the bronze loaders read.
 
 sync_matchday_stats.py and sync_player_profiles.py upload to S3 with keys like:
-  football-matchday-stats/league_39/season_2025/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
-  football-matchday-stats/reference/fixtures/league_39_season_2025.csv
-  football-matchday-stats/reference/player_profiles/player_profiles.csv
+  sportmonks/football-matchday-stats/league_39/season_2025/ENG_PREMIER_LEAGUE_MATCHDAY_01.csv
+  sportmonks/football-matchday-stats/reference/fixtures/league_39_season_2025.csv
+  sportmonks/football-matchday-stats/reference/player_profiles/player_profiles.csv
 
 Each file goes to the volume its loader reads:
   matchday files  -> football_data/<YYYY>/     (databricks_matchday_stream.py)
@@ -22,7 +22,7 @@ import json
 import os
 import re
 
-VOLUME_ROOT = "/Volumes/workspace/football_data_project"
+VOLUME_ROOT = "/Volumes/workspace/football_data_project_sportmonks"
 
 
 def volume_paths(root):
@@ -91,11 +91,10 @@ if __name__ == "__main__":
     import boto3
 
     # The job passes --catalog and --schema; the defaults are the production schema.
-    # The Sportmonks job also passes --s3-prefix, because its files have their own.
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", default="workspace")
-    parser.add_argument("--schema", default="football_data_project")
-    parser.add_argument("--s3-prefix", default="football-matchday-stats")
+    parser.add_argument("--schema", default="football_data_project_sportmonks")
+    parser.add_argument("--s3-prefix", default="sportmonks/football-matchday-stats")
     args, _ = parser.parse_known_args()
     volume_root = f"/Volumes/{args.catalog}/{args.schema}"
     volumes, manifest_path = volume_paths(volume_root)
