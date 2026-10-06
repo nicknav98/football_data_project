@@ -43,7 +43,7 @@ FIXTURE_INT_COLUMNS = (
 # Matchday columns the bronze loader reads as integers. A substitute who did
 # not play has blanks here, which would otherwise turn the column into floats.
 MATCHDAY_INT_COLUMNS = (
-    "games_number", "passes_accuracy", "cards_yellow", "cards_red", "penalty_scored",
+    "fixture_id", "team_id", "player_id", "games_number", "passes_accuracy", "cards_yellow", "cards_red", "penalty_scored",
 )
 
 

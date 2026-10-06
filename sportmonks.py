@@ -57,6 +57,13 @@ COUNTS = {
     "penalty_saved": "penalties-saved",
 }
 GOALKEEPER_ONLY = {"goals_saves", "penalty_saved"}
+# Whole -> part. Sportmonks sometimes reports a part without its whole.
+PARTS = {
+    "shots_total": "shots-on-target",
+    "duels_total": "duels-won",
+    "dribbles_attempts": "successful-dribbles",
+    "passes_total": "accurate-passes",
+}
 
 _session = requests.Session()
 _last_request_time = 0.0
@@ -192,6 +199,10 @@ def to_player_stats(row):
     teams = {team["id"]: {"team": {"id": team["id"], "name": team["name"]}, "players": []}
              for team in row.get("participants") or []}
     for entry, stats in zip(lineups, values):
+        # Sportmonks has no ID for a few players. A row needs one for its key.
+        if entry.get("player_id") is None:
+            print(f"  fixture {row.get('id')}: skipped {entry.get('player_name')} (no player ID)")
+            continue
         position = POSITIONS.get(entry.get("position_id"))
         played = (stats.get("minutes-played") or 0) > 0
         flat = {
@@ -207,8 +218,10 @@ def to_player_stats(row):
         }
         for column, code in COUNTS.items():
             value = stats.get(code)
+            # A whole stays blank when its part was reported: it is unknown, not zero.
             if (value is None and played and detailed
-                    and (column not in GOALKEEPER_ONLY or position == "G")):
+                    and (column not in GOALKEEPER_ONLY or position == "G")
+                    and not stats.get(PARTS.get(column))):
                 value = 0
             flat[column] = value
         # A second yellow is a sending off.

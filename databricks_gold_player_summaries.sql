@@ -1,11 +1,16 @@
 /* Run after silver_matchday_stats and bronze_player_profiles exist.
    The materialized view refreshes when a source table changes.
-   Silver holds one row per league, season, fixture, team, and player. */
-CREATE OR REPLACE MATERIALIZED VIEW workspace.football_data_project.gold_player_season_summary
+   Silver holds one row per league, season, fixture, team, and player.
+
+   Table names have no schema, so select the pipeline's schema first:
+       USE workspace.football_data_project_sportmonks
+   The profile table needs the position and detailed_position columns that
+   sync_player_profiles.py now writes. */
+CREATE OR REPLACE MATERIALIZED VIEW gold_player_season_summary
 TRIGGER ON UPDATE
 AS
 WITH matchdays AS (
-    SELECT * FROM workspace.football_data_project.silver_matchday_stats
+    SELECT * FROM silver_matchday_stats
 ),
 position_minutes AS (
     SELECT
@@ -119,6 +124,9 @@ SELECT
     s.season,
     COALESCE(p.name, s.matchday_player_name) AS player_name,
     r.games_position AS primary_position,
+    /* The player's usual role from the profile, such as Defensive Midfield.
+       API-Football profiles leave it null. */
+    p.detailed_position,
     s.team_names,
     s.teams_played_for,
     s.matches_in_data,
@@ -235,16 +243,17 @@ LEFT JOIN ranked_positions r
     AND s.league_id = r.league_id
     AND s.season = r.season
     AND r.position_rank = 1
-LEFT JOIN workspace.football_data_project.bronze_player_profiles p
+LEFT JOIN bronze_player_profiles p
     ON s.player_id = p.player_id;
 
 /* This view summarizes only the seasons and leagues present in the gold table. */
-CREATE OR REPLACE VIEW workspace.football_data_project.gold_player_observed_summary AS
+CREATE OR REPLACE VIEW gold_player_observed_summary AS
 SELECT
     player_id,
     MAX_BY(player_name, season) AS player_name,
     MAX(profile_age) AS profile_age,
     MAX(nationality) AS nationality,
+    MAX_BY(detailed_position, season) AS detailed_position,
     MIN(season) AS first_season_in_data,
     MAX(season) AS last_season_in_data,
     COUNT(DISTINCT season) AS seasons_in_data,
@@ -304,5 +313,5 @@ SELECT
         THEN ROUND(90.0 * SUM(saves) / SUM(saves_observed_minutes), 2)
     END AS saves_per_90,
     MAX(silver_as_of) AS silver_as_of
-FROM workspace.football_data_project.gold_player_season_summary
+FROM gold_player_season_summary
 GROUP BY player_id;
