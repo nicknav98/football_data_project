@@ -135,7 +135,7 @@ class RepositoryTests(unittest.TestCase):
         ))
         statement, parameters = self.capture[0]
         pool, output = statement.split("FROM ranked")
-        self.assertIn("percent_rank() OVER (ORDER BY tackles_per_90)", pool)
+        self.assertIn("percent_rank() OVER (ORDER BY tackles_possession_adjusted_per_90)", pool)
         self.assertNotIn("league_id = ?", pool)
         self.assertIn("detailed_position IN (?)", pool)
         self.assertNotIn("Chelsea", statement)

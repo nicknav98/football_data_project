@@ -40,13 +40,20 @@ SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
     passes_attempted, passes_with_accuracy, pass_accuracy_pct,
     saves, saves_observed_minutes,
     saves_per_90, average_rating, matches_with_rating, profile_age,
-    nationality, silver_as_of"""
+    nationality, average_team_possession_pct,
+    tackles_possession_adjusted_per_90, interceptions_possession_adjusted_per_90,
+    ball_recoveries_per_90, clearances_per_90, aerial_win_pct, aerials_with_won_data,
+    big_chances_created_per_90, passes_final_third_per_90, touches_per_90,
+    silver_as_of"""
 
 RANK_METRICS = {
     "goals_per_90", "assists_per_90", "shots_per_90",
     "key_passes_per_90", "tackles_per_90", "interceptions_per_90",
     "saves_per_90", "pass_accuracy_pct", "duel_win_pct",
     "dribble_success_pct", "average_rating",
+    "tackles_possession_adjusted_per_90", "interceptions_possession_adjusted_per_90",
+    "ball_recoveries_per_90", "clearances_per_90", "big_chances_created_per_90",
+    "passes_final_third_per_90", "touches_per_90", "aerial_win_pct",
 }
 PER_90_COVERAGE = {
     metric: metric.removesuffix("_per_90") + "_observed_minutes"
@@ -56,6 +63,7 @@ RATIO_COVERAGE = {
     "pass_accuracy_pct": ("passes_with_accuracy", 100),
     "duel_win_pct": ("duels_with_won_data", 20),
     "dribble_success_pct": ("dribbles_with_success_data", 10),
+    "aerial_win_pct": ("aerials_with_won_data", 20),
     "average_rating": ("matches_with_rating", 5),
 }
 
@@ -64,41 +72,47 @@ RATIO_COVERAGE = {
 # ranks among those players. The keys of "weights" are fixed SQL expressions
 # over the season columns.
 PASSES_PER_90 = "passes_attempted * 90.0 / minutes"
+# Defensive counts scaled to an opponent with half the ball, so players on
+# teams that defend more are not ranked above those on teams that dominate.
+TACKLES_ADJUSTED = "tackles_possession_adjusted_per_90"
+INTERCEPTIONS_ADJUSTED = "interceptions_possession_adjusted_per_90"
 ROLE_PROFILES: dict[str, dict[str, Any]] = {
     "defensive_mid": {
         "positions": ["Defensive Midfield"],
-        "weights": {"tackles_per_90": 0.25, "interceptions_per_90": 0.25,
-                    "duel_win_pct": 0.20, "pass_accuracy_pct": 0.15,
-                    PASSES_PER_90: 0.15},
+        "weights": {TACKLES_ADJUSTED: 0.20, INTERCEPTIONS_ADJUSTED: 0.20,
+                    "duel_win_pct": 0.25, "ball_recoveries_per_90": 0.15,
+                    "pass_accuracy_pct": 0.10, PASSES_PER_90: 0.10},
     },
     "central_mid": {
         "positions": ["Central Midfield"],
-        "weights": {"key_passes_per_90": 0.20, PASSES_PER_90: 0.20,
-                    "pass_accuracy_pct": 0.15, "tackles_per_90": 0.15,
-                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15},
+        "weights": {"key_passes_per_90": 0.15, "passes_final_third_per_90": 0.15,
+                    PASSES_PER_90: 0.15, "pass_accuracy_pct": 0.15,
+                    TACKLES_ADJUSTED: 0.10, INTERCEPTIONS_ADJUSTED: 0.10,
+                    "ball_recoveries_per_90": 0.10, "duel_win_pct": 0.10},
     },
     "creative_mid": {
         "positions": ["Attacking Midfield"],
-        "weights": {"key_passes_per_90": 0.35, "assists_per_90": 0.25,
-                    "goals_per_90": 0.15, "pass_accuracy_pct": 0.15,
-                    "dribble_success_pct": 0.10},
+        "weights": {"key_passes_per_90": 0.30, "big_chances_created_per_90": 0.20,
+                    "assists_per_90": 0.20, "goals_per_90": 0.15,
+                    "dribble_success_pct": 0.15},
     },
     "winger": {
         "positions": ["Left Wing", "Right Wing", "Left Midfield", "Right Midfield"],
-        "weights": {"goals_per_90": 0.25, "key_passes_per_90": 0.25,
-                    "assists_per_90": 0.20, "shots_per_90": 0.15,
-                    "dribble_success_pct": 0.15},
+        "weights": {"goals_per_90": 0.25, "key_passes_per_90": 0.20,
+                    "big_chances_created_per_90": 0.15, "assists_per_90": 0.15,
+                    "dribble_success_pct": 0.15, "shots_per_90": 0.10},
     },
     "centre_back": {
         "positions": ["Centre Back"],
-        "weights": {"duel_win_pct": 0.30, "interceptions_per_90": 0.25,
-                    "tackles_per_90": 0.20, "pass_accuracy_pct": 0.15,
+        "weights": {"duel_win_pct": 0.20, "aerial_win_pct": 0.20,
+                    INTERCEPTIONS_ADJUSTED: 0.20, TACKLES_ADJUSTED: 0.10,
+                    "clearances_per_90": 0.10, "pass_accuracy_pct": 0.10,
                     PASSES_PER_90: 0.10},
     },
     "full_back": {
         "positions": ["Left Back", "Right Back"],
-        "weights": {"tackles_per_90": 0.20, "key_passes_per_90": 0.20,
-                    "interceptions_per_90": 0.15, "duel_win_pct": 0.15,
+        "weights": {TACKLES_ADJUSTED: 0.20, "key_passes_per_90": 0.20,
+                    INTERCEPTIONS_ADJUSTED: 0.15, "duel_win_pct": 0.15,
                     "pass_accuracy_pct": 0.15, "dribble_success_pct": 0.15},
     },
     "striker": {
@@ -356,9 +370,11 @@ with a sensible minute floor.
 For comparing explicitly named players, retrieve both players' season summaries.
 For open-ended recruitment or "who should we sign" questions, use shortlist with the
 closest role and describe role_score as a statistical fit, not a verdict.
-Tackles, interceptions, and other defensive counts are per 90 minutes and are
-not adjusted for possession, so players on teams with less of the ball tend
-to post higher numbers; say so when ranking on them.
+Raw tackles and interceptions per 90 favour players on teams with less of the
+ball. The possession_adjusted_per_90 versions scale each match to an opponent
+with half the ball, using the team's possession for the whole match. Role
+scores use them. Prefer them when comparing players across teams, and give
+average_team_possession_pct as context.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
 give context for follow-up questions; retrieve data again before answering.
