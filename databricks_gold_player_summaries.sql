@@ -4,8 +4,8 @@
 
    Table names have no schema, so select the pipeline's schema first:
        USE workspace.football_data_project_sportmonks
-   The profile table needs the position and detailed_position columns that
-   sync_player_profiles.py now writes. */
+   Silver needs the possession and extra statistic columns that
+   sync_matchday_stats.py writes, so load those before running this. */
 CREATE OR REPLACE MATERIALIZED VIEW gold_player_season_summary
 TRIGGER ON UPDATE
 AS
@@ -113,6 +113,65 @@ season_totals AS (
             WHEN passes_total > 0 AND passes_accuracy BETWEEN 0 AND passes_total
             THEN passes_total ELSE 0
         END) AS passes_with_accuracy,
+        /* Statistics below come from Sportmonks and have no API-Football counterpart. */
+        CASE WHEN COUNT(shots_off) > 0 THEN SUM(shots_off) END AS shots_off_target,
+        CASE WHEN COUNT(shots_blocked) > 0 THEN SUM(shots_blocked) END AS shots_blocked,
+        CASE WHEN COUNT(shots_woodwork) > 0 THEN SUM(shots_woodwork) END AS shots_hit_woodwork,
+        CASE WHEN COUNT(own_goals) > 0 THEN SUM(own_goals) END AS own_goals,
+        CASE WHEN COUNT(big_chances_created) > 0 THEN SUM(big_chances_created) END AS big_chances_created,
+        CASE WHEN COUNT(big_chances_missed) > 0 THEN SUM(big_chances_missed) END AS big_chances_missed,
+        CASE WHEN COUNT(passes_final_third) > 0 THEN SUM(passes_final_third) END AS passes_final_third,
+        CASE WHEN COUNT(crosses_total) > 0 THEN SUM(crosses_total) END AS crosses,
+        CASE WHEN COUNT(crosses_accurate) > 0 THEN SUM(crosses_accurate) END AS crosses_accurate,
+        CASE WHEN COUNT(long_balls_total) > 0 THEN SUM(long_balls_total) END AS long_balls,
+        CASE WHEN COUNT(long_balls_accurate) > 0 THEN SUM(long_balls_accurate) END AS long_balls_accurate,
+        CASE WHEN COUNT(through_balls_total) > 0 THEN SUM(through_balls_total) END AS through_balls,
+        CASE WHEN COUNT(through_balls_accurate) > 0 THEN SUM(through_balls_accurate) END AS through_balls_accurate,
+        CASE WHEN COUNT(touches) > 0 THEN SUM(touches) END AS touches,
+        CASE WHEN COUNT(possession_lost) > 0 THEN SUM(possession_lost) END AS possession_lost,
+        CASE WHEN COUNT(dispossessed) > 0 THEN SUM(dispossessed) END AS dispossessed,
+        CASE WHEN COUNT(tackles_won) > 0 THEN SUM(tackles_won) END AS tackles_won,
+        CASE WHEN COUNT(clearances) > 0 THEN SUM(clearances) END AS clearances,
+        CASE WHEN COUNT(ball_recoveries) > 0 THEN SUM(ball_recoveries) END AS ball_recoveries,
+        CASE WHEN COUNT(aerials_won) > 0 THEN SUM(aerials_won) END AS aerials_won,
+        CASE WHEN COUNT(aerials_lost) > 0 THEN SUM(aerials_lost) END AS aerials_lost,
+        CASE WHEN COUNT(errors_leading_to_shot) > 0 THEN SUM(errors_leading_to_shot) END AS errors_leading_to_shot,
+        CASE WHEN COUNT(errors_leading_to_goal) > 0 THEN SUM(errors_leading_to_goal) END AS errors_leading_to_goal,
+        CASE WHEN COUNT(saves_inside_box) > 0 THEN SUM(saves_inside_box) END AS saves_inside_box,
+        CASE WHEN COUNT(goalkeeper_goals_conceded) > 0 THEN SUM(goalkeeper_goals_conceded) END AS goalkeeper_goals_conceded,
+        CASE WHEN COUNT(goalkeeper_punches) > 0 THEN SUM(goalkeeper_punches) END AS goalkeeper_punches,
+        CASE WHEN COUNT(goalkeeper_high_claims) > 0 THEN SUM(goalkeeper_high_claims) END AS goalkeeper_high_claims,
+        SUM(CASE WHEN touches IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS touches_observed_minutes,
+        SUM(CASE WHEN passes_final_third IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS passes_final_third_observed_minutes,
+        SUM(CASE WHEN big_chances_created IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS big_chances_created_observed_minutes,
+        SUM(CASE WHEN possession_lost IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS possession_lost_observed_minutes,
+        SUM(CASE WHEN clearances IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS clearances_observed_minutes,
+        SUM(CASE WHEN ball_recoveries IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS ball_recoveries_observed_minutes,
+        SUM(CASE WHEN aerials_won IS NOT NULL AND games_minutes >= 0 THEN games_minutes ELSE 0 END) AS aerials_won_observed_minutes,
+        SUM(CASE WHEN aerials_lost IS NOT NULL AND aerials_won IS NOT NULL THEN aerials_won + aerials_lost END) AS aerials_with_won_data,
+        SUM(CASE WHEN aerials_lost IS NOT NULL AND aerials_won IS NOT NULL THEN aerials_won END) AS paired_aerials_won,
+        SUM(CASE WHEN crosses_accurate IS NOT NULL AND crosses_total IS NOT NULL THEN crosses_total END) AS crosses_with_accuracy_data,
+        SUM(CASE WHEN crosses_accurate IS NOT NULL AND crosses_total IS NOT NULL THEN crosses_accurate END) AS paired_crosses_accurate,
+        SUM(CASE WHEN long_balls_accurate IS NOT NULL AND long_balls_total IS NOT NULL THEN long_balls_total END) AS long_balls_with_accuracy_data,
+        SUM(CASE WHEN long_balls_accurate IS NOT NULL AND long_balls_total IS NOT NULL THEN long_balls_accurate END) AS paired_long_balls_accurate,
+        SUM(CASE WHEN tackles_total IS NOT NULL AND tackles_won IS NOT NULL THEN tackles_total END) AS tackles_with_won_data,
+        SUM(CASE WHEN tackles_total IS NOT NULL AND tackles_won IS NOT NULL THEN tackles_won END) AS paired_tackles_won,
+        /* The team's share of possession, weighted by the player's minutes. */
+        SUM(CASE WHEN team_possession_pct IS NOT NULL AND games_minutes > 0
+            THEN team_possession_pct * games_minutes END) AS possession_minutes_product,
+        SUM(CASE WHEN team_possession_pct IS NOT NULL AND games_minutes > 0
+            THEN games_minutes ELSE 0 END) AS possession_observed_minutes,
+        /* Possession-adjusted counts scale each match to an opponent with half
+           the ball: count * 50 / opponent possession. Possession is the team's
+           for the whole match, not only while the player was on the pitch. */
+        SUM(CASE WHEN tackles_total IS NOT NULL AND team_possession_pct > 0 AND team_possession_pct < 100
+            THEN tackles_total * 50.0 / (100 - team_possession_pct) END) AS tackles_possession_adjusted,
+        SUM(CASE WHEN tackles_total IS NOT NULL AND team_possession_pct > 0 AND team_possession_pct < 100 AND games_minutes >= 0
+            THEN games_minutes ELSE 0 END) AS tackles_possession_adjusted_observed_minutes,
+        SUM(CASE WHEN tackles_interceptions IS NOT NULL AND team_possession_pct > 0 AND team_possession_pct < 100
+            THEN tackles_interceptions * 50.0 / (100 - team_possession_pct) END) AS interceptions_possession_adjusted,
+        SUM(CASE WHEN tackles_interceptions IS NOT NULL AND team_possession_pct > 0 AND team_possession_pct < 100 AND games_minutes >= 0
+            THEN games_minutes ELSE 0 END) AS interceptions_possession_adjusted_observed_minutes,
         MAX(silver_processing_time) AS silver_as_of
     FROM matchdays
     GROUP BY player_id, league_id, season
@@ -231,6 +290,90 @@ SELECT
     CASE WHEN s.fouls_committed_observed_minutes > 0
         THEN ROUND(90.0 * s.fouls_committed / s.fouls_committed_observed_minutes, 2)
     END AS fouls_committed_per_90,
+    s.shots_off_target,
+    s.shots_blocked,
+    s.shots_hit_woodwork,
+    s.own_goals,
+    s.big_chances_created,
+    s.big_chances_missed,
+    s.passes_final_third,
+    s.crosses,
+    s.crosses_accurate,
+    s.long_balls,
+    s.long_balls_accurate,
+    s.through_balls,
+    s.through_balls_accurate,
+    s.touches,
+    s.possession_lost,
+    s.dispossessed,
+    s.tackles_won,
+    s.clearances,
+    s.ball_recoveries,
+    s.aerials_won,
+    s.aerials_lost,
+    s.errors_leading_to_shot,
+    s.errors_leading_to_goal,
+    s.saves_inside_box,
+    s.goalkeeper_goals_conceded,
+    s.goalkeeper_punches,
+    s.goalkeeper_high_claims,
+    s.touches_observed_minutes,
+    CASE WHEN s.touches_observed_minutes > 0
+        THEN ROUND(90.0 * s.touches / s.touches_observed_minutes, 2)
+    END AS touches_per_90,
+    s.passes_final_third_observed_minutes,
+    CASE WHEN s.passes_final_third_observed_minutes > 0
+        THEN ROUND(90.0 * s.passes_final_third / s.passes_final_third_observed_minutes, 2)
+    END AS passes_final_third_per_90,
+    s.big_chances_created_observed_minutes,
+    CASE WHEN s.big_chances_created_observed_minutes > 0
+        THEN ROUND(90.0 * s.big_chances_created / s.big_chances_created_observed_minutes, 2)
+    END AS big_chances_created_per_90,
+    s.possession_lost_observed_minutes,
+    CASE WHEN s.possession_lost_observed_minutes > 0
+        THEN ROUND(90.0 * s.possession_lost / s.possession_lost_observed_minutes, 2)
+    END AS possession_lost_per_90,
+    s.clearances_observed_minutes,
+    CASE WHEN s.clearances_observed_minutes > 0
+        THEN ROUND(90.0 * s.clearances / s.clearances_observed_minutes, 2)
+    END AS clearances_per_90,
+    s.ball_recoveries_observed_minutes,
+    CASE WHEN s.ball_recoveries_observed_minutes > 0
+        THEN ROUND(90.0 * s.ball_recoveries / s.ball_recoveries_observed_minutes, 2)
+    END AS ball_recoveries_per_90,
+    s.aerials_won_observed_minutes,
+    CASE WHEN s.aerials_won_observed_minutes > 0
+        THEN ROUND(90.0 * s.aerials_won / s.aerials_won_observed_minutes, 2)
+    END AS aerials_won_per_90,
+    s.aerials_with_won_data,
+    CASE WHEN s.aerials_with_won_data > 0
+        THEN ROUND(100.0 * s.paired_aerials_won / s.aerials_with_won_data, 1)
+    END AS aerial_win_pct,
+    s.crosses_with_accuracy_data,
+    CASE WHEN s.crosses_with_accuracy_data > 0
+        THEN ROUND(100.0 * s.paired_crosses_accurate / s.crosses_with_accuracy_data, 1)
+    END AS cross_accuracy_pct,
+    s.long_balls_with_accuracy_data,
+    CASE WHEN s.long_balls_with_accuracy_data > 0
+        THEN ROUND(100.0 * s.paired_long_balls_accurate / s.long_balls_with_accuracy_data, 1)
+    END AS long_ball_accuracy_pct,
+    s.tackles_with_won_data,
+    CASE WHEN s.tackles_with_won_data > 0
+        THEN ROUND(100.0 * s.paired_tackles_won / s.tackles_with_won_data, 1)
+    END AS tackle_success_pct,
+    CASE WHEN s.possession_observed_minutes > 0
+        THEN ROUND(s.possession_minutes_product / s.possession_observed_minutes, 1)
+    END AS average_team_possession_pct,
+    ROUND(s.tackles_possession_adjusted, 1) AS tackles_possession_adjusted,
+    s.tackles_possession_adjusted_observed_minutes,
+    CASE WHEN s.tackles_possession_adjusted_observed_minutes > 0
+        THEN ROUND(90.0 * s.tackles_possession_adjusted / s.tackles_possession_adjusted_observed_minutes, 2)
+    END AS tackles_possession_adjusted_per_90,
+    ROUND(s.interceptions_possession_adjusted, 1) AS interceptions_possession_adjusted,
+    s.interceptions_possession_adjusted_observed_minutes,
+    CASE WHEN s.interceptions_possession_adjusted_observed_minutes > 0
+        THEN ROUND(90.0 * s.interceptions_possession_adjusted / s.interceptions_possession_adjusted_observed_minutes, 2)
+    END AS interceptions_possession_adjusted_per_90,
     p.age AS profile_age,
     TRY_CAST(p.birth_date AS DATE) AS birth_date,
     p.nationality,

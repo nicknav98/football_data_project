@@ -175,6 +175,30 @@ class PlayerStatsTests(unittest.TestCase):
         rows = self.rows({**FIXTURE, "lineups": FIXTURE["lineups"] + [unknown]})
         self.assertEqual(sorted(rows), [10, 11, 12])
 
+    def test_extra_statistics_and_team_possession_reach_the_row(self):
+        fixture = {**FIXTURE, "statistics": [
+            {"participant_id": 1, "type": {"code": "ball-possession"}, "data": {"value": 62}},
+            {"participant_id": 2, "type": {"code": "ball-possession"}, "data": {"value": 38}},
+            {"participant_id": 1, "type": {"code": "corners"}, "data": {"value": 7}},
+        ], "lineups": [
+            lineup(10, 1, 26, [detail("minutes-played", 90), detail("passes", 40),
+                               detail("ball-recovery", 9), detail("aeriels-won", 2),
+                               detail("tackles-won", 1)]),
+            lineup(11, 1, 24, [detail("minutes-played", 90), detail("punches", 1)]),
+            lineup(12, 2, 27, [], bench=True),
+        ]}
+        rows = self.rows(fixture)
+        self.assertEqual((rows[10]["team_possession_pct"], rows[12]["team_possession_pct"]), (62, 38))
+        self.assertEqual((rows[10]["ball_recoveries"], rows[10]["aerials_won"]), (9, 2))
+        self.assertEqual((rows[10]["clearances"], rows[10]["aerials_lost"]), (0, 0))
+        # Tackles won was reported without tackles, so the total is unknown.
+        self.assertEqual((rows[10]["tackles_won"], rows[10]["tackles_total"]), (1, None))
+        self.assertIsNone(rows[10]["goalkeeper_punches"])
+        self.assertEqual((rows[11]["goalkeeper_punches"], rows[11]["goalkeeper_high_claims"]), (1, 0))
+
+    def test_possession_is_blank_when_the_fixture_has_none(self):
+        self.assertIsNone(self.rows()[10]["team_possession_pct"])
+
     def test_second_yellow_counts_as_a_red_card(self):
         self.assertEqual((self.rows()[10]["cards_yellow"], self.rows()[10]["cards_red"]), (1, 1))
 
