@@ -23,6 +23,28 @@ current nested matchday layout; run the sync to completion before relying on it.
 The Databricks merge key also includes league and season. Use a fresh Auto Loader
 checkpoint and schema location when switching an existing stream to this layout.
 
+### Why the project moved to Sportmonks
+
+The pipeline was built on API-Football. Two limits of that data led to the
+move.
+
+- **Positions.** API-Football labels a player only as goalkeeper, defender,
+  midfielder, or forward. The scout had to guess a role such as defensive
+  midfielder from statistics. Sportmonks records a detailed position, such as
+  Defensive Midfield, on each player profile.
+- **Inflated per 90 rates.** API-Football leaves a statistic blank when it is
+  zero. The gold summaries treat a blank as not recorded and leave that
+  match's minutes out of the rate, so a rate is computed only over the matches
+  where the player registered the statistic. For 2025/26 the API-Football
+  gold shows Erling Haaland at 1.42 goals per 90 and Declan Rice at 1.39,
+  where goals divided by minutes gives 0.82 and 0.12. Tackles, interceptions,
+  and other counts are overstated in the same way, by less. The Sportmonks
+  sync writes those zeros, so its gold rates are correct.
+
+The API-Football gold tables keep this flaw. They are left as they are and
+should not be used for per 90 comparisons. Minutes, appearances, and goals
+agree between the two providers.
+
 ### Sportmonks as the data provider
 
 Both sync scripts can read from Sportmonks instead of API-Football. Set these
@@ -256,14 +278,31 @@ Rankings require at least the requested minutes of coverage for per 90 stats.
 Percentage rankings also require a minimum number of observed attempts or
 rated matches.
 
-A shortlist scores players of one position for a role: `defensive_mid`,
-`creative_mid`, `defender`, or `striker`. `role_score` is a 0 to 100 weighted
-average of percentile ranks, taken among all players of that position in the
-season with at least `min_minutes`, across all five leagues. League, age, and
-club filters narrow the output without changing a score. The weights are in
-`ROLE_PROFILES` in `scout_backend.py`. Positions in the data are only
-goalkeeper, defender, midfielder, and forward, so a role is a statistical
-profile, not a recorded position.
+The API reads the gold views built from Sportmonks data, in
+`workspace.football_data_project_sportmonks` unless `SCOUT_GOLD_SCHEMA` names
+another schema. Those views must exist before it starts.
+
+A shortlist scores the players whose usual position fits a role. The position
+is the `detailed_position` on the player's Sportmonks profile.
+
+| Role | Detailed positions |
+| --- | --- |
+| `defensive_mid` | Defensive Midfield |
+| `central_mid` | Central Midfield |
+| `creative_mid` | Attacking Midfield |
+| `winger` | Left Wing, Right Wing, Left Midfield, Right Midfield |
+| `centre_back` | Centre Back |
+| `full_back` | Left Back, Right Back |
+| `striker` | Centre Forward, Secondary Striker |
+
+`role_score` is a 0 to 100 weighted average of percentile ranks, taken among
+the players in those positions in the season with at least `min_minutes`,
+across all five leagues. League, age, and club filters narrow the output
+without changing a score. The weights are in `ROLE_PROFILES` in
+`scout_backend.py`. A profile has one position, so a player who changed role
+is still scored under the profile's. Defensive counts are per 90 minutes and
+are not adjusted for possession, so players on teams with less of the ball
+tend to score higher on them.
 
 Install `requirements.txt` and set these server-side environment variables:
 
@@ -275,6 +314,7 @@ Install `requirements.txt` and set these server-side environment variables:
 | `OPENAI_API_KEY` | OpenAI API key |
 | `OPENAI_MODEL` | Model available to your OpenAI project |
 | `SCOUT_API_KEY` | Shared secret required by the question endpoint |
+| `SCOUT_GOLD_SCHEMA` | Optional catalog and schema of the gold views |
 
 The API and Streamlit chat automatically load `.env` beside `scout_api.py`.
 Variables already set in the process environment take precedence. Restart the

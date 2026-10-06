@@ -137,9 +137,9 @@ class RepositoryTests(unittest.TestCase):
         pool, output = statement.split("FROM ranked")
         self.assertIn("percent_rank() OVER (ORDER BY tackles_per_90)", pool)
         self.assertNotIn("league_id = ?", pool)
-        self.assertIn("p_cap <= 0.6", output)
+        self.assertIn("detailed_position IN (?)", pool)
         self.assertNotIn("Chelsea", statement)
-        self.assertEqual(parameters, [2025, "M", 1500, 39, 23, "Chelsea'", 5])
+        self.assertEqual(parameters, [2025, "Defensive Midfield", 1500, 39, 23, "Chelsea'", 5])
 
     def test_shortlist_without_filters_is_valid_sql(self):
         self.repo.shortlist(ShortlistArgs(
@@ -148,7 +148,7 @@ class RepositoryTests(unittest.TestCase):
         ))
         statement, parameters = self.capture[0]
         self.assertIn("WHERE TRUE", statement)
-        self.assertEqual(parameters, [2025, "F", 900, 10])
+        self.assertEqual(parameters, [2025, "Centre Forward", "Secondary Striker", 900, 10])
 
     def test_role_weights_sum_to_one(self):
         for role, profile in ROLE_PROFILES.items():
