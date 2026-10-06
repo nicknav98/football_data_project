@@ -91,9 +91,11 @@ if __name__ == "__main__":
     import boto3
 
     # The job passes --catalog and --schema; the defaults are the production schema.
+    # The Sportmonks job also passes --s3-prefix, because its files have their own.
     parser = argparse.ArgumentParser()
     parser.add_argument("--catalog", default="workspace")
     parser.add_argument("--schema", default="football_data_project")
+    parser.add_argument("--s3-prefix", default="football-matchday-stats")
     args, _ = parser.parse_known_args()
     volume_root = f"/Volumes/{args.catalog}/{args.schema}"
     volumes, manifest_path = volume_paths(volume_root)
@@ -105,7 +107,7 @@ if __name__ == "__main__":
         aws_secret_access_key=dbutils.secrets.get(scope=scope_name, key="aws-secret-key"),
     )
     bucket_name = "football-data-project-nicknav98"
-    s3_prefix = "football-matchday-stats/"
+    s3_prefix = args.s3_prefix.strip("/") + "/"
 
     print(f"Syncing s3://{bucket_name}/{s3_prefix} into {volume_root}...")
     downloaded, skipped = sync_s3_to_volumes(s3_client, bucket_name, s3_prefix, volumes, manifest_path)

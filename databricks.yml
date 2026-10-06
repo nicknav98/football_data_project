@@ -4,6 +4,7 @@
 #   databricks bundle deploy              deploy to dev (the default target)
 #   databricks bundle deploy -t prod      deploy to prod
 #   databricks bundle run matchday_ingest run the deployed job
+#   databricks bundle run sportmonks_ingest
 bundle:
   name: football_data_project
 
@@ -17,6 +18,9 @@ variables:
   schema:
     description: Schema that holds the pipeline's tables and volumes.
     default: football_data_project
+  sportmonks_schema:
+    description: Schema that holds the Sportmonks pipeline's tables and volumes.
+    default: football_data_project_sportmonks
 
 targets:
   # Deploys a copy of the job named "[dev <user>] MatchDay Ingest" with its
@@ -30,6 +34,7 @@ targets:
     variables:
       # Development mode prefixes the schema declared below with this.
       schema: dev_${workspace.current_user.short_name}_football_data_project
+      sportmonks_schema: dev_${workspace.current_user.short_name}_football_data_project_sportmonks
     resources:
       schemas:
         pipeline:
