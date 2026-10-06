@@ -91,7 +91,7 @@ Percentages in a role score have no minimum-attempts guard beyond
 | --- | --- |
 | Data access | Four fixed read-only tools: search, seasons, leaderboard, shortlist. The model cannot write SQL. |
 | Lookups | Up to six per question |
-| Citations | Every figure cites a retrieved row as `[player_id:league_id:season]`. An answer that cites anything else is rejected. |
+| Citations | Every figure cites a retrieved row as `[player_id:league_id:season]`. An answer that cites no row, or a row that was not retrieved, is sent back once for correction, then rejected. The rejected text is logged as a warning. |
 | History | The service keeps none. Send earlier turns in `history` (up to 20). |
 | Output budget | 4,096 tokens, retried once at 8,192 if truncated |
 | Timeout | 120 seconds, no automatic retry |
