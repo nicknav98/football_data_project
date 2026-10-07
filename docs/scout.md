@@ -88,8 +88,9 @@ Percentages in a role score have no minimum-attempts guard beyond
 
 ## Percentiles
 
-`GET /players/{player_id}/seasons` and the assistant's season lookup return
-`<metric>_percentile` for each ranking metric and for `passes_per_90`: the share of the comparison
+Every season row, from the seasons, leaderboard and shortlist lookups alike,
+carries `<metric>_percentile` for each ranking metric and for `passes_per_90`:
+the share of the comparison
 group the player is above, with a tie counted as half.
 
 | Part | Rule |
@@ -98,9 +99,10 @@ group the player is above, with a tie counted as half.
 | Minutes floor | A third of the most minutes anyone played that season, returned as `percentile_pool_min_minutes` (1,140 for a full season) |
 | Group size | Returned as `percentile_pool_size` |
 | Percentages and rating | Null unless the player and the group member both meet the attempts guard below |
-| Player below the floor | Still ranked. The assistant is told to say the sample is small. |
+| Small sample | `small_sample` is true below the minutes floor, or below 900 minutes when the floor is lower, as early in a season. The row is still ranked; the assistant is told to say the minutes are too few. |
 
-Leaderboard and shortlist rows do not carry percentiles.
+A shortlist's `role_score` ranks only players with the requested `min_minutes`,
+so it uses a different group from these percentiles.
 
 ## Markers
 
@@ -139,7 +141,7 @@ can then be held against the figure and its percentile.
 | Grouping | One table per `detailed_position`, since percentiles are within a position |
 | Columns | Minutes, the statistics the position's role is scored on (see [Roles](#roles)), and rating. A shortlist row also shows its role score. |
 | Cells | The value, then its percentile in brackets where one was computed. A dash means no value. |
-| Small samples | Minutes marked † when below `percentile_pool_min_minutes` |
+| Small samples | Minutes marked † when the row's `small_sample` is true |
 | Other positions | Goalkeepers: saves, pass accuracy, rating. Any other: passes, pass accuracy, duels won, rating. |
 
 ## Assistant
