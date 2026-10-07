@@ -117,12 +117,28 @@ The user sees:     Scott made 1.92 tackles per 90 (51st percentile).
 | --- | --- |
 | Form | `{player_id:league_id:season field}`. `field` is any key of that row. |
 | Display | Counts get thousands separators, rates two decimals, `_pct` a percent sign, `_percentile` reads "51st percentile", a missing value reads "not available" |
-| Sources | The rows an answer drew on are listed on a final `Sources:` line |
+| Sources | The rows an answer drew on are listed on a final `Sources:` line, below the [figures table](#figures-table) |
+| Judgements | The assistant is told to give the figure and its percentile with every "strong" or "weak", and to name seasons by year |
 | Bad marker | One naming a row that was not retrieved, or a field not in it, is sent back once for correction, then the answer is rejected. So is an answer with no marker. |
 | Typed figure | A statistic typed as digits is sent back once. If it persists the answer is shown with a "Not verified" note listing the figures, also returned as `unverified_figures`. |
 | Not counted as typed | Seasons, player and league IDs, numbers in the question or the lookup arguments, "per 90", decades such as "mid-40s", whole numbers below 10 |
 | Earlier turns | A follow-up must retrieve a row again to use it |
 | Known gap | A marker can still name the wrong row or field. The value shown is then real but misplaced. |
+
+## Figures table
+
+`figures_table` in `scout_backend.py` adds a table below every answer, built
+from the rows the answer drew on, not by the model. A judgement in the prose
+can then be held against the figure and its percentile.
+
+| Part | Rule |
+| --- | --- |
+| Rows | One per season the answer used a marker from |
+| Grouping | One table per `detailed_position`, since percentiles are within a position |
+| Columns | Minutes, the statistics the position's role is scored on (see [Roles](#roles)), and rating. A shortlist row also shows its role score. |
+| Cells | The value, then its percentile in brackets where one was computed. A dash means no value. |
+| Small samples | Minutes marked † when below `percentile_pool_min_minutes` |
+| Other positions | Goalkeepers: saves, pass accuracy, rating. Any other: passes, pass accuracy, duels won, rating. |
 
 ## Assistant
 
