@@ -110,15 +110,16 @@ place. A figure in an answer therefore cannot differ from the data.
 ```
 The model writes:  Scott made {37550443:39:2025 tackles_per_90} tackles per 90
                    ({37550443:39:2025 tackles_per_90_percentile}).
-The user sees:     Scott made 1.92 tackles per 90 (51st percentile).
+The user sees:     Scott made 1.92 tackles per 90 (51st percentile (average)).
 ```
 
 | Part | Rule |
 | --- | --- |
 | Form | `{player_id:league_id:season field}`. `field` is any key of that row. |
-| Display | Counts get thousands separators, rates two decimals, `_pct` a percent sign, `_percentile` reads "51st percentile", a missing value reads "not available" |
+| Display | Counts get thousands separators, rates two decimals, `_pct` a percent sign, `_percentile` reads "35th percentile (below average)", a missing value reads "not available" |
 | Sources | The rows an answer drew on are listed on a final `Sources:` line, below the [figures table](#figures-table) |
-| Judgements | The assistant is told to give the figure and its percentile with every "strong" or "weak", and to name seasons by year |
+| Level words | Code states the level of a percentile: low (under 20), below average (20 to 39), average (40 to 59), above average (60 to 79), high (80 and over). The assistant is told not to add its own. |
+| Judgements | The assistant is told to give the figure and its percentile whenever it says a player is good, poor, better or worse at something, and to name seasons by year |
 | Bad marker | One naming a row that was not retrieved, or a field not in it, is sent back once for correction, then the answer is rejected. So is an answer with no marker. |
 | Typed figure | A statistic typed as digits is sent back once. If it persists the answer is shown with a "Not verified" note listing the figures, also returned as `unverified_figures`. |
 | Not counted as typed | Seasons, player and league IDs, numbers in the question or the lookup arguments, "per 90", decades such as "mid-40s", whole numbers below 10 |

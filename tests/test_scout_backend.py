@@ -371,7 +371,7 @@ class AssistantTests(unittest.TestCase):
             "{8:39:2024 passes_attempted} at {8:39:2024, pass_accuracy_pct}.", sources)
         self.assertEqual(filled, (
             "Scott (AFC Bournemouth) made 330 passes at 85.2% in 753 minutes, with "
-            "3.20 tackles per 90 (97th percentile) and dribbling not available. "
+            "3.20 tackles per 90 (97th percentile (high)) and dribbling not available. "
             "Garner made 696 at 82.0%."))
         self.assertEqual(used, ["7:39:2024", "8:39:2024"])
         self.assertEqual(unknown, [])
@@ -414,8 +414,13 @@ class AssistantTests(unittest.TestCase):
         for field, value, expected in (
                 ("minutes", 2863, "2,863"), ("season", 2025, "2025"), ("goals_per_90", 0.2, "0.20"),
                 ("role_score", 78.4, "78.4"), ("average_team_possession_pct", 50.0, "50.0%"),
-                ("x_percentile", 1, "1st percentile"), ("x_percentile", 12, "12th percentile"),
-                ("x_percentile", 53, "53rd percentile"), ("x_percentile", 100, "100th percentile")):
+                ("x_percentile", 1, "1st percentile (low)"),
+                ("x_percentile", 12, "12th percentile (low)"),
+                ("x_percentile", 35, "35th percentile (below average)"),
+                ("x_percentile", 53, "53rd percentile (average)"),
+                ("x_percentile", 60, "60th percentile (above average)"),
+                ("x_percentile", 80, "80th percentile (high)"),
+                ("x_percentile", 100, "100th percentile (high)")):
             with self.subTest(field=field, value=value):
                 self.assertEqual(show_value(field, value), expected)
 

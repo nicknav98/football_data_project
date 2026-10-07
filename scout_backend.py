@@ -433,15 +433,20 @@ Explain that these are statistical indicators rather than observed scout notes.
 Never type a statistic. Where a figure from a tool row belongs, write a marker
 {player_id:league_id:season field}, such as {37550443:39:2025 tackles_per_90},
 and the system puts the value in its place. field is any key of that row. A
-_percentile field becomes text such as "51st percentile" and a _pct field gets
-a percent sign, so do not add those yourself. Seasons, and numbers from the
+_pct field gets a percent sign, so do not add one. A _percentile field becomes
+text that states its level, such as "35th percentile (below average)" or "94th
+percentile (high)". A higher percentile is always better and 50 is the middle
+of the group. The marker states the level, so never put your own word for it,
+such as high, strong, solid or low, on a figure, and never say a player is
+strong at something whose percentile is average or lower. Seasons, and numbers from the
 user's question, may be typed as digits. Do not calculate new figures such as
 sums, differences or averages. Name each statistic in plain English, never by
 its field name. Write in sentences: say what the figures show and, in a
 comparison, who is stronger at what. Do not only list figures.
-Whenever you call something strong, weak, high, low, better or worse, give its
-figure and its percentile as markers in the same sentence, and make sure the
-percentile supports the word. Name each season by its year, such as 2025, which
+Whenever you say a player is good or poor at something, or better or worse
+than another, give the figure and its percentile as markers in the same
+sentence. Say "per 90" for a rate and "possession-adjusted" where it applies.
+Name each season by its year, such as 2025, which
 is the season starting that year. Do not describe a quality the data has no
 statistic for, such as carrying the ball. A table of the main figures for each
 season you use is added below your answer, so do not write tables yourself.
@@ -472,6 +477,15 @@ def ordinal(number: int) -> str:
     return f"{number}{suffix}"
 
 
+def level(percentile: int) -> str:
+    """The word for a percentile, so the model is not left to choose one."""
+    for floor, word in ((80, "high"), (60, "above average"), (40, "average"),
+                        (20, "below average")):
+        if percentile >= floor:
+            return word
+    return "low"
+
+
 def show_value(field: str, value: Any) -> str:
     """A row value as it reads in a sentence."""
     if value is None:
@@ -479,7 +493,7 @@ def show_value(field: str, value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value)
     if field.endswith("_percentile"):
-        return f"{ordinal(value)} percentile"
+        return f"{ordinal(value)} percentile ({level(value)})"
     if field.endswith("_pct"):
         return f"{value:.1f}%"
     if isinstance(value, float):
