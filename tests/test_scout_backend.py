@@ -12,7 +12,8 @@ from openai import OpenAI
 
 from scout_backend import (
     GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
-    MODEL_RETRY_OUTPUT_TOKENS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs, cited_rows,
+    MODEL_RETRY_OUTPUT_TOKENS, RANK_METRICS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
+    cited_rows, unmatched_figures,
 )
 
 
@@ -149,6 +150,20 @@ class RepositoryTests(unittest.TestCase):
         statement, parameters = self.capture[0]
         self.assertIn("WHERE TRUE", statement)
         self.assertEqual(parameters, [2025, "Centre Forward", "Secondary Striker", 900, 10])
+
+    def test_player_seasons_ranks_each_metric_within_position_and_season(self):
+        self.repo.player_seasons(10)
+        statement, parameters = self.capture[0]
+        self.assertEqual(parameters, [10])
+        pool = statement.split("FROM player p")[1].split("GROUP BY")[0]
+        self.assertIn("q.season = p.season", pool)
+        self.assertIn("q.detailed_position = p.detailed_position", pool)
+        self.assertIn("q.minutes >= q.pool_min_minutes", pool)
+        self.assertNotIn("league_id", pool)
+        for metric in RANK_METRICS:
+            self.assertEqual(statement.count(f"AS {metric}_percentile"), 1, metric)
+        # A percentage from too few attempts is left unranked on both sides.
+        self.assertIn("p.passes_with_accuracy >= 100 AND q.passes_with_accuracy >= 100", statement)
 
     def test_role_weights_sum_to_one(self):
         for role, profile in ROLE_PROFILES.items():
@@ -347,6 +362,57 @@ class AssistantTests(unittest.TestCase):
     def test_citations_with_spaces_or_sharing_brackets_are_read(self):
         self.assertEqual(cited_rows("A [10 : 39 : 2025] and B [9:39:2025, 9:39:2024]; see [note]."),
                          {"10:39:2025", "9:39:2025", "9:39:2024"})
+
+    def test_figure_copied_from_another_players_row_is_caught(self):
+        scott = {"player_id": 7, "league_id": 39, "season": 2024, "minutes": 753,
+                 "passes_attempted": 330, "pass_accuracy_pct": 85.2, "tackles_per_90": 3.23}
+        garner = {"player_id": 8, "league_id": 39, "season": 2024, "minutes": 1595,
+                  "passes_attempted": 696, "pass_accuracy_pct": 82.0, "tackles_per_90": 2.65}
+        sources = {"7:39:2024": scott, "8:39:2024": garner}
+        answer = ("Scott 2024 [7:39:2024]\n"
+                  "- Minutes: 753; passes: 696 attempts at 82.0%; tackles 3.23 per 90\n"
+                  "Garner (ID 8), 2024 season [8:39:2024]\n"
+                  "- Minutes: 1,595; passes: 696 attempts at 82.0%; tackles 2.65/90")
+        self.assertEqual(unmatched_figures(answer, sources, []),
+                         ["696 (not in 7:39:2024)", "82.0% (not in 7:39:2024)"])
+
+    def test_figure_check_passes_what_is_not_a_season_figure(self):
+        sources = {"7:39:2025": {"player_id": 7, "league_id": 39, "season": 2025,
+                                 "minutes": 2863, "pass_accuracy_pct": 84.9,
+                                 "team_names": ["Hoffenheim 1899"],
+                                 "tackles_per_90_percentile": 51}}
+        for answer in (
+                "In 2025/26 he played 2,863 minutes for Hoffenheim 1899 [7:39:2025].",
+                "1. Pass accuracy 85% and 84.9% both describe [7:39:2025].",
+                "He is one of 3 players here, at the 51st percentile [7:39:2025].",
+                "His team sat in the mid-40s for possession [7:39:2025].",
+                "Among players under 23 with 1500 minutes, he qualifies [7:39:2025].",
+                "As before [7:39:2025] and [9:39:2025], 12.5 was the earlier figure."):
+            with self.subTest(answer=answer):
+                self.assertEqual(unmatched_figures(answer, sources, [23.0, 1500.0]), [])
+        # A line with no citation is checked against the closest one above.
+        self.assertEqual(
+            unmatched_figures("Player [7:39:2025]\nHe played 3414 minutes.", sources, []),
+            ["3414 (not in 7:39:2025)"])
+
+    def test_wrong_figure_gets_one_correction_then_a_visible_warning(self):
+        wrong, right = "Ten scored 0.75 per 90 [10:39:2025].", "Ten scored 0.57 per 90 [10:39:2025]."
+        assistant, model = self.scripted_assistant(
+            function_response(), text_response(wrong), text_response(right))
+        with self.assertLogs("scout_backend", level="WARNING"):
+            result = assistant.ask("How did player 10 score?")
+        self.assertEqual(result["answer"], right)
+        self.assertEqual(result["unverified_figures"], [])
+        self.assertIn("0.75 (not in 10:39:2025)", model.requests[2]["input"][-1]["content"])
+
+        assistant, model = self.scripted_assistant(
+            function_response(), text_response(wrong), text_response(wrong))
+        with self.assertLogs("scout_backend", level="WARNING"):
+            result = assistant.ask("How did player 10 score?")
+        self.assertEqual(len(model.requests), 3)
+        self.assertEqual(result["unverified_figures"], ["0.75 (not in 10:39:2025)"])
+        self.assertTrue(result["answer"].startswith(wrong))
+        self.assertIn("Not verified", result["answer"])
 
     def test_answer_rejects_unretrieved_citation(self):
         client = SimpleNamespace(responses=FakeResponses("Claim [99:39:2025]."))

@@ -85,6 +85,35 @@ Percentages in a role score have no minimum-attempts guard beyond
 | Percentages | At least 100 passes, 20 duels, 20 aerial duels, 10 dribbles |
 | Rating | At least 5 rated matches |
 
+## Percentiles
+
+`GET /players/{player_id}/seasons` and the assistant's season lookup return
+`<metric>_percentile` for each ranking metric: the share of the comparison
+group the player is above, with a tie counted as half.
+
+| Part | Rule |
+| --- | --- |
+| Comparison group | Same `detailed_position`, same season, all five leagues |
+| Minutes floor | A third of the most minutes anyone played that season, returned as `percentile_pool_min_minutes` (1,140 for a full season) |
+| Group size | Returned as `percentile_pool_size` |
+| Percentages and rating | Null unless the player and the group member both meet the attempts guard below |
+| Player below the floor | Still ranked. The assistant is told to say the sample is small. |
+
+Leaderboard and shortlist rows do not carry percentiles.
+
+## Figure check
+
+`unmatched_figures` in `scout_backend.py` compares the numbers in an answer
+with the cited rows.
+
+| Case | Treatment |
+| --- | --- |
+| Rounding | A figure passes if a row value rounds to it |
+| Not checked | Whole numbers below 10, "per 90", decades such as "mid-40s", the second year in "2025/26" |
+| Pass on any line | Player IDs, league IDs, seasons, numbers in the question, the lookup arguments, and name-search results |
+| Row from an earlier turn | Lines citing it are not checked |
+| Known gap | A figure the model worked out itself, such as a sum, is flagged even when right. The assistant is told not to calculate. |
+
 ## Assistant
 
 | Rule | Detail |
@@ -92,10 +121,26 @@ Percentages in a role score have no minimum-attempts guard beyond
 | Data access | Four fixed read-only tools: search, seasons, leaderboard, shortlist. The model cannot write SQL. |
 | Lookups | Up to six per question |
 | Citations | Every figure cites a retrieved row as `[player_id:league_id:season]`. An answer that cites no row, or a row that was not retrieved, is sent back once for correction, then rejected. The rejected text is logged as a warning. |
+| Figures | Each figure must be in the row cited on its line, or on the closest cited line above. A mismatch is sent back once for correction. If it persists the answer is shown with a "Not verified" note listing the figures, also returned as `unverified_figures`. |
+| Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric. The assistant is told to call a figure high or low from that, not from the raw number. |
 | History | The service keeps none. Send earlier turns in `history` (up to 20). |
 | Output budget | 4,096 tokens, retried once at 8,192 if truncated |
 | Timeout | 120 seconds, no automatic retry |
 | Not in the data | Fees, wages, contracts, scout notes. The assistant says so. |
+
+## Logs
+
+There is no log file. Both the API and the chat write timestamped lines to
+standard error. For the Databricks App, open the **Logs** tab on the app's page,
+or the app's URL with `/logz` added. It shows the running app, not a history.
+
+| Line | Level | Meaning |
+| --- | --- | --- |
+| `Scout OpenAI response completed: model=... elapsed=...` | Info | One per model call, with the model in use |
+| `Scout data lookup: tool=... rows=...` | Info | One per lookup |
+| `Scout answer rejected (...)` | Warning | A citation or figure check failed; includes the answer text |
+| `Scout model response truncated` | Warning | The output budget was reached |
+| `Scout OpenAI request timed out` | Warning | The 120-second timeout was reached |
 
 ## Access
 
