@@ -128,6 +128,20 @@ with the cited rows.
 | Timeout | 120 seconds, no automatic retry |
 | Not in the data | Fees, wages, contracts, scout notes. The assistant says so. |
 
+## Logs
+
+There is no log file. Both the API and the chat write timestamped lines to
+standard error. For the Databricks App, open the **Logs** tab on the app's page,
+or the app's URL with `/logz` added. It shows the running app, not a history.
+
+| Line | Level | Meaning |
+| --- | --- | --- |
+| `Scout OpenAI response completed: model=... elapsed=...` | Info | One per model call, with the model in use |
+| `Scout data lookup: tool=... rows=...` | Info | One per lookup |
+| `Scout answer rejected (...)` | Warning | A citation or figure check failed; includes the answer text |
+| `Scout model response truncated` | Warning | The output budget was reached |
+| `Scout OpenAI request timed out` | Warning | The 120-second timeout was reached |
+
 ## Access
 
 | Surface | Protection |

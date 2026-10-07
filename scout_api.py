@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import logging
 import os
 from pathlib import Path
 import secrets
@@ -21,6 +22,12 @@ from scout_backend import (
 
 # Shared by the API and Streamlit chat; deployed environment variables take precedence.
 load_dotenv(Path(__file__).resolve().with_name(".env"), override=False)
+
+# Timestamped lines on stderr, which the Databricks App "Logs" tab shows. Without
+# this the assistant's warnings have no time and its info lines are dropped.
+# Other libraries stay at warnings so their request logs do not bury ours.
+logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logging.getLogger("scout_backend").setLevel(logging.INFO)
 
 app = FastAPI(title="Football scout API", version="1.0.0")
 
