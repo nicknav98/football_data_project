@@ -26,7 +26,7 @@ assistant.
 
 | Page | Contents |
 | --- | --- |
-| [For analysts](docs/analyst.md) | The statistical method: rates, possession adjustment, percentiles, role scores, and their limits. Start here with questions about how a number is computed. |
+| [Statistical method](docs/analyst.md) | What each indicator targets and means, how per-90 figures, percentiles and role scores are calculated, and their limits. Start here with questions about how a number is computed. |
 | [Statistics](docs/statistics.md) | What is collected, the gold metrics, and the scouting questions they answer |
 | [Pipeline](docs/pipeline.md) | Sync, S3 layout, Databricks job, tables, configuration |
 | [Scout](docs/scout.md) | API endpoints, roles, chat app, configuration |
