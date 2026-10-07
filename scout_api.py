@@ -34,7 +34,8 @@ app = FastAPI(title="Football scout API", version="1.0.0")
 
 class ChatTurn(BaseModel):
     role: Literal["user", "assistant"]
-    content: str = Field(min_length=1, max_length=4000)
+    # An answer carries a figures table, so a turn is longer than its prose.
+    content: str = Field(min_length=1, max_length=12000)
 
 
 class ScoutQuestion(BaseModel):

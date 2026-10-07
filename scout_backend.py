@@ -439,6 +439,12 @@ user's question, may be typed as digits. Do not calculate new figures such as
 sums, differences or averages. Name each statistic in plain English, never by
 its field name. Write in sentences: say what the figures show and, in a
 comparison, who is stronger at what. Do not only list figures.
+Whenever you call something strong, weak, high, low, better or worse, give its
+figure and its percentile as markers in the same sentence, and make sure the
+percentile supports the word. Name each season by its year, such as 2025, which
+is the season starting that year. Do not describe a quality the data has no
+statistic for, such as carrying the ball. A table of the main figures for each
+season you use is added below your answer, so do not write tables yourself.
 If information is absent or coverage is incomplete, say so. Keep the answer
 concise and report the season and league for comparisons."""
 
@@ -461,6 +467,11 @@ def numbers_in(value: Any) -> list[float]:
 MARKER = re.compile(r"\{\s*(\d+)\s*:\s*(\d+)\s*:\s*(\d+)[\s.,]+(\w+)\s*\}")
 
 
+def ordinal(number: int) -> str:
+    suffix = "th" if 10 <= number % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(number % 10, "th")
+    return f"{number}{suffix}"
+
+
 def show_value(field: str, value: Any) -> str:
     """A row value as it reads in a sentence."""
     if value is None:
@@ -468,8 +479,7 @@ def show_value(field: str, value: Any) -> str:
     if isinstance(value, list):
         return ", ".join(str(item) for item in value)
     if field.endswith("_percentile"):
-        suffix = "th" if 10 <= value % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(value % 10, "th")
-        return f"{value}{suffix} percentile"
+        return f"{ordinal(value)} percentile"
     if field.endswith("_pct"):
         return f"{value:.1f}%"
     if isinstance(value, float):
@@ -501,6 +511,73 @@ def fill_markers(answer: str, sources: dict[str, dict[str, Any]]) -> tuple[str, 
     for other in re.findall(r"\{[^{}\n]*\}", filled):
         unknown[other] = None
     return filled, list(used), list(unknown)
+
+
+# Column headings for the figures table.
+FIGURE_LABELS = {
+    TACKLES_ADJUSTED: "Tackles /90, adjusted", INTERCEPTIONS_ADJUSTED: "Interceptions /90, adjusted",
+    "duel_win_pct": "Duels won", "ball_recoveries_per_90": "Recoveries /90",
+    "pass_accuracy_pct": "Pass accuracy", "passes_per_90": "Passes /90",
+    "key_passes_per_90": "Key passes /90", "passes_final_third_per_90": "Final-third passes /90",
+    "big_chances_created_per_90": "Big chances created /90", "assists_per_90": "Assists /90",
+    "goals_per_90": "Goals /90", "shots_per_90": "Shots /90",
+    "shots_on_target_pct": "Shots on target", "dribble_success_pct": "Dribbles won",
+    "aerial_win_pct": "Aerials won", "clearances_per_90": "Clearances /90",
+    "saves_per_90": "Saves /90", "average_rating": "Rating", "role_score": "Role score",
+}
+
+
+def figure_fields(position: str) -> list[str]:
+    """The statistics tabled for a position: those its role is scored on, and rating."""
+    for profile in ROLE_PROFILES.values():
+        if position in profile["positions"]:
+            fields = ["passes_per_90" if field == PASSES_PER_90 else field
+                      for field in profile["weights"]]
+            return [*fields, "average_rating"]
+    if position == "Goalkeeper":
+        return ["saves_per_90", "pass_accuracy_pct", "average_rating"]
+    return ["passes_per_90", "pass_accuracy_pct", "duel_win_pct", "average_rating"]
+
+
+def figures_table(rows: list[dict[str, Any]]) -> str:
+    """Tables of the main figures in the rows an answer drew on, one per position.
+
+    Built from the rows, not by the model, so a reader can hold the answer's
+    judgements against the figures and percentiles whatever the answer says.
+    """
+    positions: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        positions.setdefault(row.get("detailed_position") or "Position not recorded", []).append(row)
+    parts = []
+    small_sample = False
+    for position, members in positions.items():
+        fields = figure_fields(position)
+        if any("role_score" in row for row in members):
+            fields = ["role_score", *fields]
+        header = ["Player, season", "Minutes", *(FIGURE_LABELS[field] for field in fields)]
+        lines = ["| " + " | ".join(header) + " |", "|" + " --- |" * len(header)]
+        # Players in the order the answer reached them, each newest season first.
+        first_use = {row["player_id"]: index for index, row in reversed(list(enumerate(members)))}
+        for row in sorted(members, key=lambda row: (first_use[row["player_id"]], -row["season"])):
+            name = str(row.get("player_name") or f"Player {row['player_id']}").replace("|", "/")
+            season = f"{row['season']}/{(row['season'] + 1) % 100:02d}"
+            minutes = row.get("minutes")
+            cells = [f"{name}, {season}", "–" if minutes is None else show_value("minutes", minutes)]
+            if (minutes or 0) < (row.get("percentile_pool_min_minutes") or 0):
+                cells[1] += "†"
+                small_sample = True
+            for field in fields:
+                cell = "–" if row.get(field) is None else show_value(field, row[field])
+                if row.get(f"{field}_percentile") is not None:
+                    cell += f" ({ordinal(row[f'{field}_percentile'])})"
+                cells.append(cell)
+            lines.append("| " + " | ".join(cells) + " |")
+        parts.append(f"**{position}**\n\n" + "\n".join(lines))
+    note = ("Figures from the data. A percentile in brackets is the player's rank among "
+            "players in that position that season, across the five leagues.")
+    if small_sample:
+        note += " † Too few minutes for the percentiles to be reliable."
+    return "\n\n".join([*parts, note])
 
 
 def typed_figures(text: str, sources: dict[str, dict[str, Any]],
@@ -642,7 +719,8 @@ class ScoutAssistant:
                             "row. The retrieved rows are: " + ", ".join(sorted(sources)) + ". "
                             "To use a player whose rows are not listed, retrieve them first.")})
                         continue
-                    answer = filled + "\n\nSources: " + " ".join(f"[{row}]" for row in used)
+                    answer = (filled + "\n\n" + figures_table([sources[row] for row in used])
+                              + "\n\nSources: " + " ".join(f"[{row}]" for row in used))
                     if typed:
                         # A second attempt with typed figures is shown with a warning
                         # rather than withheld: its marked figures are still sound.

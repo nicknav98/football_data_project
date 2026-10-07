@@ -13,7 +13,7 @@ from openai import OpenAI
 from scout_backend import (
     GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
     MODEL_RETRY_OUTPUT_TOKENS, RANK_METRICS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
-    fill_markers, show_value, typed_figures,
+    figures_table, fill_markers, show_value, typed_figures,
 )
 
 
@@ -346,7 +346,8 @@ class AssistantTests(unittest.TestCase):
         with self.assertLogs("scout_backend", level="WARNING") as logs:
             result = assistant.ask("How did player 10 score?")
 
-        self.assertEqual(result["answer"], "Ten: 0.57.\n\nSources: [10:39:2025]")
+        self.assertTrue(result["answer"].startswith("Ten: 0.57.\n\n**Position not recorded**"))
+        self.assertTrue(result["answer"].endswith("\n\nSources: [10:39:2025]"))
         self.assertEqual(len(model.requests), 3)
         correction = model.requests[2]["input"][-1]["content"]
         self.assertIn("{9:39:2025 goals_per_90}", correction)
@@ -383,6 +384,32 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(used, ["7:39:2024"])
         self.assertTrue(filled.endswith(" 753"))
 
+    def test_figures_table_shows_role_statistics_with_percentiles_by_position(self):
+        scott = {"player_id": 7, "player_name": "Alex Scott", "season": 2024, "minutes": 753,
+                 "detailed_position": "Central Midfield", "percentile_pool_min_minutes": 1140,
+                 "key_passes_per_90": 1.43, "key_passes_per_90_percentile": 77,
+                 "pass_accuracy_pct": 85.2, "pass_accuracy_pct_percentile": 51,
+                 "passes_per_90": 39.44, "passes_per_90_percentile": 38,
+                 "duel_win_pct": None, "duel_win_pct_percentile": None, "average_rating": 6.88}
+        garner = {"player_id": 8, "player_name": "James Garner", "season": 2025, "minutes": 3414,
+                  "detailed_position": "Defensive Midfield", "percentile_pool_min_minutes": 1140,
+                  "role_score": 81.3, "duel_win_pct": 61.3, "duel_win_pct_percentile": 90}
+        table = figures_table([scott, garner])
+        central, defensive, note = table.split("\n\n**")[0], table.split("\n\n**")[1], table
+        self.assertTrue(central.startswith("**Central Midfield**\n\n| Player, season | Minutes | "
+                                           "Key passes /90 | Final-third passes /90 | Passes /90 |"))
+        self.assertIn("| Alex Scott, 2024/25 | 753† | 1.43 (77th) | – | 39.44 (38th) | "
+                      "85.2% (51st) |", central)
+        self.assertTrue(central.rstrip().endswith("| – | 6.88 |"))
+        self.assertIn("Defensive Midfield**\n\n| Player, season | Minutes | Role score | ", defensive)
+        self.assertIn("| James Garner, 2025/26 | 3,414 | 81.3 | ", defensive)
+        self.assertIn("61.3% (90th)", defensive)
+        self.assertIn("† Too few minutes", note)
+        self.assertNotIn("†", figures_table([garner]))
+        # Each player's seasons run newest first, whatever order the answer used them in.
+        ordered = figures_table([scott, garner, {**scott, "season": 2025}])
+        self.assertLess(ordered.index("Alex Scott, 2025/26"), ordered.index("Alex Scott, 2024/25"))
+
     def test_values_read_naturally(self):
         for field, value, expected in (
                 ("minutes", 2863, "2,863"), ("season", 2025, "2025"), ("goals_per_90", 0.2, "0.20"),
@@ -411,7 +438,8 @@ class AssistantTests(unittest.TestCase):
             function_response(), text_response(typed), text_response(marked))
         with self.assertLogs("scout_backend", level="WARNING"):
             result = assistant.ask("How did player 10 score?")
-        self.assertEqual(result["answer"], "Ten scored 0.57 per 90.\n\nSources: [10:39:2025]")
+        self.assertTrue(result["answer"].startswith("Ten scored 0.57 per 90.\n\n"))
+        self.assertIn("| Player 10, 2025/26 |", result["answer"])
         self.assertEqual(result["unverified_figures"], [])
         self.assertIn("0.75", model.requests[2]["input"][-1]["content"])
 
