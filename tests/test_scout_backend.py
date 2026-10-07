@@ -135,7 +135,7 @@ class RepositoryTests(unittest.TestCase):
             min_minutes=1500, exclude_team="Chelsea'", limit=5,
         ))
         statement, parameters = self.capture[0]
-        pool, output = statement.split("FROM ranked")
+        pool, output = statement.split(") AS role_ranked")
         self.assertIn("percent_rank() OVER (ORDER BY tackles_possession_adjusted_per_90)", pool)
         self.assertNotIn("league_id = ?", pool)
         self.assertIn("detailed_position IN (?)", pool)
@@ -155,7 +155,7 @@ class RepositoryTests(unittest.TestCase):
         self.repo.player_seasons(10)
         statement, parameters = self.capture[0]
         self.assertEqual(parameters, [10])
-        pool = statement.split("FROM player p")[1].split("GROUP BY")[0]
+        pool = statement.split("FROM picked p")[1].split("GROUP BY")[0]
         self.assertIn("q.season = p.season", pool)
         self.assertIn("q.detailed_position = p.detailed_position", pool)
         self.assertIn("q.minutes >= q.pool_min_minutes", pool)
@@ -166,6 +166,23 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("try_divide(passes_attempted * 90.0, minutes)", statement)
         # A percentage from too few attempts is left unranked on both sides.
         self.assertIn("p.passes_with_accuracy >= 100 AND q.passes_with_accuracy >= 100", statement)
+
+    def test_every_lookup_returns_the_same_percentiles_and_small_sample_flag(self):
+        self.repo.player_seasons(10)
+        self.repo.leaderboard(LeaderboardArgs(metric="goals_per_90", league_id=None,
+                                              season=2025, min_minutes=450, limit=5))
+        self.repo.shortlist(ShortlistArgs(role="striker", season=2025, league_id=None,
+                                          max_age=None, min_minutes=900, exclude_team=None, limit=5))
+        tails = [statement.split("), ranked AS (")[1] for statement, _ in self.capture]
+        self.assertEqual(len(tails), 3)
+        self.assertEqual(tails[0].split("ORDER BY")[0].replace(" pool_size, role_score,", " "),
+                         tails[2].split("ORDER BY")[0].replace(" pool_size, role_score,", " "))
+        for tail in tails:
+            self.assertIn("greatest(pool_min_minutes, 900)", tail)
+            self.assertIn("AS small_sample", tail)
+            self.assertIn("passes_per_90_percentile", tail)
+        self.assertTrue(self.capture[2][0].rstrip().endswith(
+            "ORDER BY role_score DESC, minutes DESC, player_id"))
 
     def test_role_weights_sum_to_one(self):
         for role, profile in ROLE_PROFILES.items():
@@ -407,13 +424,13 @@ class AssistantTests(unittest.TestCase):
 
     def test_figures_table_shows_role_statistics_with_percentiles_by_position(self):
         scott = {"player_id": 7, "player_name": "Alex Scott", "season": 2024, "minutes": 753,
-                 "detailed_position": "Central Midfield", "percentile_pool_min_minutes": 1140,
+                 "detailed_position": "Central Midfield", "small_sample": True,
                  "key_passes_per_90": 1.43, "key_passes_per_90_percentile": 77,
                  "pass_accuracy_pct": 85.2, "pass_accuracy_pct_percentile": 51,
                  "passes_per_90": 39.44, "passes_per_90_percentile": 38,
                  "duel_win_pct": None, "duel_win_pct_percentile": None, "average_rating": 6.88}
         garner = {"player_id": 8, "player_name": "James Garner", "season": 2025, "minutes": 3414,
-                  "detailed_position": "Defensive Midfield", "percentile_pool_min_minutes": 1140,
+                  "detailed_position": "Defensive Midfield", "small_sample": False,
                   "role_score": 81.3, "duel_win_pct": 61.3, "duel_win_pct_percentile": 90}
         table = figures_table([scott, garner])
         central, defensive, note = table.split("\n\n**")[0], table.split("\n\n**")[1], table
@@ -427,6 +444,8 @@ class AssistantTests(unittest.TestCase):
         self.assertIn("61.3% (90th)", defensive)
         self.assertIn("† Too few minutes", note)
         self.assertNotIn("†", figures_table([garner]))
+        self.assertIn("percentile in brackets", figures_table([garner]))
+        self.assertNotIn("percentile", figures_table([{**garner, "duel_win_pct_percentile": None}]))
         # Each player's seasons run newest first, whatever order the answer used them in.
         ordered = figures_table([scott, garner, {**scott, "season": 2025}])
         self.assertLess(ordered.index("Alex Scott, 2025/26"), ordered.index("Alex Scott, 2024/25"))

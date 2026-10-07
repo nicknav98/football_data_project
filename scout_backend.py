@@ -73,6 +73,9 @@ RATIO_COVERAGE = {
 # least this share of the most minutes anyone played that season. A share keeps
 # the comparison group usable early in a season, when no one has many minutes.
 PERCENTILE_POOL_MINUTES_SHARE = 1 / 3
+# A row is marked a small sample below that floor, or below this many minutes
+# when the floor is lower, as it is in the first weeks of a season.
+SMALL_SAMPLE_MINUTES = 900
 # Passes per 90 is not a gold column, so it cannot be a leaderboard metric, but
 # it is worked out for a player's own seasons and ranked like the others.
 PERCENTILE_METRICS = sorted(RANK_METRICS | {"passes_per_90"})
@@ -244,8 +247,14 @@ class GoldRepository:
             parameters,
         )
 
-    def player_seasons(self, player_id: int) -> list[dict[str, Any]]:
-        args = PlayerArgs(player_id=player_id)
+    def _with_percentiles(self, picked: str, parameters: list[Any], order_by: str,
+                          extra: str = "") -> list[dict[str, Any]]:
+        """Run a selection of season rows and add each row's percentiles.
+
+        picked is SQL selecting rows FROM seasons: the gold table plus passes
+        per 90 and each season's minutes floor. Every lookup goes through here,
+        so a row has the same percentiles whichever tool returned it.
+        """
         percentiles = ", ".join(f"{metric}_percentile" for metric in PERCENTILE_METRICS)
         return self._query(
             f"""WITH seasons AS (
@@ -253,26 +262,37 @@ class GoldRepository:
                                   * {PERCENTILE_POOL_MINUTES_SHARE} AS pool_min_minutes,
                            round(try_divide(passes_attempted * 90.0, minutes), 2) AS passes_per_90
                     FROM {GOLD_SEASONS}
-                ), player AS (
-                    SELECT * FROM seasons
-                    WHERE player_id = ?
-                    ORDER BY season DESC, league_id
-                    LIMIT 12
+                ), picked AS (
+                    {picked}
                 ), ranked AS (
-                    SELECT p.league_id, p.season, count(*) AS percentile_pool_size,
+                    SELECT p.player_id, p.league_id, p.season, count(*) AS percentile_pool_size,
                            {', '.join(percentile_columns())}
-                    FROM player p
+                    FROM picked p
                     JOIN seasons q ON q.season = p.season
                         AND q.detailed_position = p.detailed_position
                         AND q.minutes >= q.pool_min_minutes
-                    GROUP BY p.league_id, p.season
+                    GROUP BY p.player_id, p.league_id, p.season
                 )
-                SELECT {SEASON_COLUMNS}, passes_per_90, percentile_pool_size,
+                SELECT {SEASON_COLUMNS}, passes_per_90, {extra}
+                       coalesce(minutes, 0) < greatest(pool_min_minutes, {SMALL_SAMPLE_MINUTES})
+                           AS small_sample,
+                       percentile_pool_size,
                        cast(ceil(pool_min_minutes) AS INT) AS percentile_pool_min_minutes,
                        {percentiles}
-                FROM player LEFT JOIN ranked USING (league_id, season)
-                ORDER BY season DESC, league_id""",
-            [args.player_id],
+                FROM picked LEFT JOIN ranked USING (player_id, league_id, season)
+                ORDER BY {order_by}""",
+            parameters,
+        )
+
+    def player_seasons(self, player_id: int) -> list[dict[str, Any]]:
+        args = PlayerArgs(player_id=player_id)
+        order_by = "season DESC, league_id"
+        return self._with_percentiles(
+            f"""SELECT * FROM seasons
+                    WHERE player_id = ?
+                    ORDER BY {order_by}
+                    LIMIT 12""",
+            [args.player_id], order_by,
         )
 
     def leaderboard(self, args: LeaderboardArgs) -> list[dict[str, Any]]:
@@ -294,13 +314,13 @@ class GoldRepository:
             filters.append("season = ?")
             parameters.append(args.season)
         parameters.append(args.limit)
-        return self._query(
-            f"""SELECT {SEASON_COLUMNS}
-                FROM {GOLD_SEASONS}
-                WHERE {' AND '.join(filters)}
-                ORDER BY {args.metric} DESC, minutes DESC, player_id
-                LIMIT ?""",
-            parameters,
+        order_by = f"{args.metric} DESC, minutes DESC, player_id"
+        return self._with_percentiles(
+            f"""SELECT * FROM seasons
+                    WHERE {' AND '.join(filters)}
+                    ORDER BY {order_by}
+                    LIMIT ?""",
+            parameters, order_by,
         )
 
     def shortlist(self, args: ShortlistArgs) -> list[dict[str, Any]]:
@@ -312,7 +332,7 @@ class GoldRepository:
                  for index, (expression, _) in enumerate(weights)]
         score = " + ".join(f"{weight} * p_{index}"
                            for index, (_, weight) in enumerate(weights))
-        # Percentiles cover every league in the season, so the filters below
+        # The role score ranks every league in the season, so the filters below
         # narrow the output without changing a player's score.
         filters = []
         positions = profile["positions"]
@@ -327,24 +347,20 @@ class GoldRepository:
             filters.append("NOT exists(team_names, team -> contains(lower(team), lower(?)))")
             parameters.append(args.exclude_team.strip())
         parameters.append(args.limit)
-        return self._query(
-            f"""WITH pool AS (
-                    SELECT {SEASON_COLUMNS}
-                    FROM {GOLD_SEASONS}
-                    WHERE season = ?
-                        AND detailed_position IN ({', '.join('?' * len(positions))})
-                        AND minutes >= ?
-                ), ranked AS (
-                    SELECT *, count(*) OVER () AS pool_size, {', '.join(ranks)}
-                    FROM pool
-                )
-                SELECT {SEASON_COLUMNS}, pool_size,
-                       round(100 * ({score}), 1) AS role_score
-                FROM ranked
-                WHERE {' AND '.join(filters) or 'TRUE'}
-                ORDER BY role_score DESC, minutes DESC, player_id
-                LIMIT ?""",
-            parameters,
+        order_by = "role_score DESC, minutes DESC, player_id"
+        return self._with_percentiles(
+            f"""SELECT *, round(100 * ({score}), 1) AS role_score
+                    FROM (
+                        SELECT *, count(*) OVER () AS pool_size, {', '.join(ranks)}
+                        FROM seasons
+                        WHERE season = ?
+                            AND detailed_position IN ({', '.join('?' * len(positions))})
+                            AND minutes >= ?
+                    ) AS role_ranked
+                    WHERE {' AND '.join(filters) or 'TRUE'}
+                    ORDER BY {order_by}
+                    LIMIT ?""",
+            parameters, order_by, extra="pool_size, role_score,",
         )
 
 
@@ -363,7 +379,7 @@ TOOLS = [
     },
     {
         "type": "function", "name": "player_seasons", "strict": True,
-        "description": "Get all loaded league-season summaries for one player ID. Each <metric>_percentile is 0-100: the share of players with the same detailed_position in that season, across all five leagues, with at least percentile_pool_min_minutes minutes, whom the player is above on that metric. percentile_pool_size is how many players that is.",
+        "description": "Get all loaded league-season summaries for one player ID. Each <metric>_percentile is 0-100: the share of players with the same detailed_position in that season, across all five leagues, with at least percentile_pool_min_minutes minutes, whom the player is above on that metric. percentile_pool_size is how many players that is. small_sample is true when the minutes are too few to rank reliably.",
         "parameters": {
             "type": "object", "additionalProperties": False,
             "properties": {"player_id": {"type": "integer"}},
@@ -372,7 +388,7 @@ TOOLS = [
     },
     {
         "type": "function", "name": "leaderboard", "strict": True,
-        "description": "Rank player league-seasons by one supported metric. Use at least 450 minutes for scouting comparisons unless the user asks otherwise.",
+        "description": "Rank player league-seasons by one supported metric. Use at least 450 minutes for scouting comparisons unless the user asks otherwise. Rows carry the same percentile fields as player_seasons.",
         "parameters": {
             "type": "object", "additionalProperties": False,
             "properties": {
@@ -387,7 +403,7 @@ TOOLS = [
     },
     {
         "type": "function", "name": "shortlist", "strict": True,
-        "description": "Shortlist players for a role in one season. A role covers the players whose usual position on their profile fits it, such as Defensive Midfield, shown as detailed_position. role_score is a 0-100 weighted percentile among those players across all five leagues with at least min_minutes. Use at least 1500 minutes for a completed season unless the user asks otherwise.",
+        "description": "Shortlist players for a role in one season. A role covers the players whose usual position on their profile fits it, such as Defensive Midfield, shown as detailed_position. role_score is a 0-100 weighted percentile among those players across all five leagues with at least min_minutes. Use at least 1500 minutes for a completed season unless the user asks otherwise. Rows carry the same percentile fields as player_seasons, ranked among everyone in that detailed_position, which role_score's own ranking is not.",
         "parameters": {
             "type": "object", "additionalProperties": False,
             "properties": {
@@ -424,8 +440,8 @@ so 50 is an even share and a figure in the low 40s is a team that defends a lot.
 Judge whether a figure is high, average or low from its _percentile, never from
 the raw number, and say which position group the percentile is among. Players
 in different positions are ranked against different groups. A null percentile
-means too few attempts to rank. If a player's minutes are below
-percentile_pool_min_minutes, say the sample is too small to rank reliably.
+means too few attempts to rank. If a row's small_sample is true, say in plain
+words that the minutes are too few to rank reliably.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
 give context for follow-up questions; retrieve data again before answering.
@@ -579,7 +595,7 @@ def figures_table(rows: list[dict[str, Any]]) -> str:
             season = f"{row['season']}/{(row['season'] + 1) % 100:02d}"
             minutes = row.get("minutes")
             cells = [f"{name}, {season}", "–" if minutes is None else show_value("minutes", minutes)]
-            if (minutes or 0) < (row.get("percentile_pool_min_minutes") or 0):
+            if row.get("small_sample"):
                 cells[1] += "†"
                 small_sample = True
             for field in fields:
@@ -589,8 +605,11 @@ def figures_table(rows: list[dict[str, Any]]) -> str:
                 cells.append(cell)
             lines.append("| " + " | ".join(cells) + " |")
         parts.append(f"**{position}**\n\n" + "\n".join(lines))
-    note = ("Figures from the data. A percentile in brackets is the player's rank among "
-            "players in that position that season, across the five leagues.")
+    note = "Figures from the data."
+    if any(value is not None for row in rows for key, value in row.items()
+           if key.endswith("_percentile")):
+        note += (" A percentile in brackets is the player's rank among players in that "
+                 "position that season, across the five leagues.")
     if small_sample:
         note += " † Too few minutes for the percentiles to be reliable."
     return "\n\n".join([*parts, note])
