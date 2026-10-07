@@ -88,7 +88,7 @@ Percentages in a role score have no minimum-attempts guard beyond
 ## Percentiles
 
 `GET /players/{player_id}/seasons` and the assistant's season lookup return
-`<metric>_percentile` for each ranking metric: the share of the comparison
+`<metric>_percentile` for each ranking metric and for `passes_per_90`: the share of the comparison
 group the player is above, with a tie counted as half.
 
 | Part | Rule |
@@ -101,18 +101,28 @@ group the player is above, with a tie counted as half.
 
 Leaderboard and shortlist rows do not carry percentiles.
 
-## Figure check
+## Markers
 
-`unmatched_figures` in `scout_backend.py` compares the numbers in an answer
-with the cited rows.
+The model does not type statistics. Where a figure belongs it writes a marker,
+and `fill_markers` in `scout_backend.py` puts the value from that row in its
+place. A figure in an answer therefore cannot differ from the data.
 
-| Case | Treatment |
+```
+The model writes:  Scott made {37550443:39:2025 tackles_per_90} tackles per 90
+                   ({37550443:39:2025 tackles_per_90_percentile}).
+The user sees:     Scott made 1.92 tackles per 90 (51st percentile).
+```
+
+| Part | Rule |
 | --- | --- |
-| Rounding | A figure passes if a row value rounds to it |
-| Not checked | Whole numbers below 10, "per 90", decades such as "mid-40s", the second year in "2025/26" |
-| Pass on any line | Player IDs, league IDs, seasons, numbers in the question, the lookup arguments, and name-search results |
-| Row from an earlier turn | Lines citing it are not checked |
-| Known gap | A figure the model worked out itself, such as a sum, is flagged even when right. The assistant is told not to calculate. |
+| Form | `{player_id:league_id:season field}`. `field` is any key of that row. |
+| Display | Counts get thousands separators, rates two decimals, `_pct` a percent sign, `_percentile` reads "51st percentile", a missing value reads "not available" |
+| Sources | The rows an answer drew on are listed on a final `Sources:` line |
+| Bad marker | One naming a row that was not retrieved, or a field not in it, is sent back once for correction, then the answer is rejected. So is an answer with no marker. |
+| Typed figure | A statistic typed as digits is sent back once. If it persists the answer is shown with a "Not verified" note listing the figures, also returned as `unverified_figures`. |
+| Not counted as typed | Seasons, player and league IDs, numbers in the question or the lookup arguments, "per 90", decades such as "mid-40s", whole numbers below 10 |
+| Earlier turns | A follow-up must retrieve a row again to use it |
+| Known gap | A marker can still name the wrong row or field. The value shown is then real but misplaced. |
 
 ## Assistant
 
@@ -120,9 +130,8 @@ with the cited rows.
 | --- | --- |
 | Data access | Four fixed read-only tools: search, seasons, leaderboard, shortlist. The model cannot write SQL. |
 | Lookups | Up to six per question |
-| Citations | Every figure cites a retrieved row as `[player_id:league_id:season]`. An answer that cites no row, or a row that was not retrieved, is sent back once for correction, then rejected. The rejected text is logged as a warning. |
-| Figures | Each figure must be in the row cited on its line, or on the closest cited line above. A mismatch is sent back once for correction. If it persists the answer is shown with a "Not verified" note listing the figures, also returned as `unverified_figures`. |
-| Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric. The assistant is told to call a figure high or low from that, not from the raw number. |
+| Figures | Written as markers and filled in from the retrieved rows. See [Markers](#markers). The rejected text of a failed answer is logged as a warning. |
+| Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric and for passes per 90. The assistant is told to call a figure high or low from that, not from the raw number. |
 | History | The service keeps none. Send earlier turns in `history` (up to 20). |
 | Output budget | 4,096 tokens, retried once at 8,192 if truncated |
 | Timeout | 120 seconds, no automatic retry |
@@ -138,7 +147,7 @@ or the app's URL with `/logz` added. It shows the running app, not a history.
 | --- | --- | --- |
 | `Scout OpenAI response completed: model=... elapsed=...` | Info | One per model call, with the model in use |
 | `Scout data lookup: tool=... rows=...` | Info | One per lookup |
-| `Scout answer rejected (...)` | Warning | A citation or figure check failed; includes the answer text |
+| `Scout answer rejected (...)` | Warning | A marker was unusable or a figure was typed; includes the answer text |
 | `Scout model response truncated` | Warning | The output budget was reached |
 | `Scout OpenAI request timed out` | Warning | The 120-second timeout was reached |
 

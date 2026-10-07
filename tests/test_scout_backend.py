@@ -13,7 +13,7 @@ from openai import OpenAI
 from scout_backend import (
     GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
     MODEL_RETRY_OUTPUT_TOKENS, RANK_METRICS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
-    cited_rows, unmatched_figures,
+    fill_markers, show_value, typed_figures,
 )
 
 
@@ -160,8 +160,10 @@ class RepositoryTests(unittest.TestCase):
         self.assertIn("q.detailed_position = p.detailed_position", pool)
         self.assertIn("q.minutes >= q.pool_min_minutes", pool)
         self.assertNotIn("league_id", pool)
-        for metric in RANK_METRICS:
+        for metric in RANK_METRICS | {"passes_per_90"}:
             self.assertEqual(statement.count(f"AS {metric}_percentile"), 1, metric)
+        # Passes per 90 is not in gold; a season with no minutes must not fail.
+        self.assertIn("try_divide(passes_attempted * 90.0, minutes)", statement)
         # A percentage from too few attempts is left unranked on both sides.
         self.assertIn("p.passes_with_accuracy >= 100 AND q.passes_with_accuracy >= 100", statement)
 
@@ -171,7 +173,7 @@ class RepositoryTests(unittest.TestCase):
 
 
 class FakeResponses:
-    def __init__(self, answer="Ten scored 0.57 per 90 [10:39:2025]."):
+    def __init__(self, answer="Ten scored {10:39:2025 goals_per_90} per 90."):
         self.requests = []
         self.answer = answer
 
@@ -190,7 +192,7 @@ def function_response(name="player_seasons", arguments='{"player_id":10}', call_
     ])
 
 
-def text_response(answer="Ten scored 0.57 per 90 [10:39:2025]."):
+def text_response(answer="Ten scored {10:39:2025 goals_per_90} per 90."):
     return SimpleNamespace(status="completed", output=[], output_text=answer)
 
 
@@ -337,96 +339,107 @@ class AssistantTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "lookup limit"):
             assistant.ask("Compare these player seasons")
 
-    def test_bad_citation_gets_one_correction_and_the_reason_is_logged(self):
-        class Responses(FakeResponses):
-            def create(self, **kwargs):
-                self.requests.append(kwargs)
-                if len(self.requests) == 1:
-                    return function_response()
-                answer = "Nine did well [9:39:2025]." if len(self.requests) == 2 else "Ten [10:39:2025]."
-                return SimpleNamespace(output=[], output_text=answer)
-
-        responses = Responses()
-        assistant = ScoutAssistant(GoldRepository(lambda: FakeConnection([])),
-                                   SimpleNamespace(responses=responses), "configured-model")
+    def test_bad_marker_gets_one_correction_and_the_reason_is_logged(self):
+        assistant, model = self.scripted_assistant(
+            function_response(), text_response("Nine did well: {9:39:2025 goals_per_90}."),
+            text_response("Ten: {10:39:2025 goals_per_90}."))
         with self.assertLogs("scout_backend", level="WARNING") as logs:
             result = assistant.ask("How did player 10 score?")
 
-        self.assertEqual(result["answer"], "Ten [10:39:2025].")
-        self.assertEqual(len(responses.requests), 3)
-        correction = responses.requests[2]["input"][-1]["content"]
-        self.assertIn("9:39:2025", correction)
-        self.assertIn("[10:39:2025]", correction)
+        self.assertEqual(result["answer"], "Ten: 0.57.\n\nSources: [10:39:2025]")
+        self.assertEqual(len(model.requests), 3)
+        correction = model.requests[2]["input"][-1]["content"]
+        self.assertIn("{9:39:2025 goals_per_90}", correction)
+        self.assertIn("10:39:2025", correction)
         self.assertIn("Nine did well", logs.output[0])
 
-    def test_citations_with_spaces_or_sharing_brackets_are_read(self):
-        self.assertEqual(cited_rows("A [10 : 39 : 2025] and B [9:39:2025, 9:39:2024]; see [note]."),
-                         {"10:39:2025", "9:39:2025", "9:39:2024"})
+    def test_markers_are_filled_from_their_own_row(self):
+        sources = {
+            "7:39:2024": {"player_id": 7, "league_id": 39, "season": 2024, "minutes": 753,
+                          "passes_attempted": 330, "pass_accuracy_pct": 85.2,
+                          "tackles_per_90": 3.2, "tackles_per_90_percentile": 97,
+                          "dribble_success_pct": None, "team_names": ["AFC Bournemouth"]},
+            "8:39:2024": {"player_id": 8, "league_id": 39, "season": 2024, "minutes": 1595,
+                          "passes_attempted": 696, "pass_accuracy_pct": 82.0},
+        }
+        filled, used, unknown = fill_markers(
+            "Scott ({7:39:2024 team_names}) made {7:39:2024 passes_attempted} passes at "
+            "{7 : 39 : 2024.pass_accuracy_pct} in {7:39:2024 minutes} minutes, with "
+            "{7:39:2024 tackles_per_90} tackles per 90 ({7:39:2024 tackles_per_90_percentile}) "
+            "and dribbling {7:39:2024 dribble_success_pct}. Garner made "
+            "{8:39:2024 passes_attempted} at {8:39:2024, pass_accuracy_pct}.", sources)
+        self.assertEqual(filled, (
+            "Scott (AFC Bournemouth) made 330 passes at 85.2% in 753 minutes, with "
+            "3.20 tackles per 90 (97th percentile) and dribbling not available. "
+            "Garner made 696 at 82.0%."))
+        self.assertEqual(used, ["7:39:2024", "8:39:2024"])
+        self.assertEqual(unknown, [])
 
-    def test_figure_copied_from_another_players_row_is_caught(self):
-        scott = {"player_id": 7, "league_id": 39, "season": 2024, "minutes": 753,
-                 "passes_attempted": 330, "pass_accuracy_pct": 85.2, "tackles_per_90": 3.23}
-        garner = {"player_id": 8, "league_id": 39, "season": 2024, "minutes": 1595,
-                  "passes_attempted": 696, "pass_accuracy_pct": 82.0, "tackles_per_90": 2.65}
-        sources = {"7:39:2024": scott, "8:39:2024": garner}
-        answer = ("Scott 2024 [7:39:2024]\n"
-                  "- Minutes: 753; passes: 696 attempts at 82.0%; tackles 3.23 per 90\n"
-                  "Garner (ID 8), 2024 season [8:39:2024]\n"
-                  "- Minutes: 1,595; passes: 696 attempts at 82.0%; tackles 2.65/90")
-        self.assertEqual(unmatched_figures(answer, sources, []),
-                         ["696 (not in 7:39:2024)", "82.0% (not in 7:39:2024)"])
+    def test_markers_for_missing_rows_fields_or_in_unreadable_forms_are_reported(self):
+        sources = {"7:39:2024": {"player_id": 7, "league_id": 39, "season": 2024, "minutes": 753}}
+        filled, used, unknown = fill_markers(
+            "{9:39:2024 minutes} {7:39:2024 wages} {Scott 2024 minutes} {7:39:2024 minutes}", sources)
+        self.assertEqual(unknown, ["{9:39:2024 minutes}", "{7:39:2024 wages}", "{Scott 2024 minutes}"])
+        self.assertEqual(used, ["7:39:2024"])
+        self.assertTrue(filled.endswith(" 753"))
 
-    def test_figure_check_passes_what_is_not_a_season_figure(self):
-        sources = {"7:39:2025": {"player_id": 7, "league_id": 39, "season": 2025,
-                                 "minutes": 2863, "pass_accuracy_pct": 84.9,
-                                 "team_names": ["Hoffenheim 1899"],
-                                 "tackles_per_90_percentile": 51}}
-        for answer in (
-                "In 2025/26 he played 2,863 minutes for Hoffenheim 1899 [7:39:2025].",
-                "1. Pass accuracy 85% and 84.9% both describe [7:39:2025].",
-                "He is one of 3 players here, at the 51st percentile [7:39:2025].",
-                "His team sat in the mid-40s for possession [7:39:2025].",
-                "Among players under 23 with 1500 minutes, he qualifies [7:39:2025].",
-                "As before [7:39:2025] and [9:39:2025], 12.5 was the earlier figure."):
-            with self.subTest(answer=answer):
-                self.assertEqual(unmatched_figures(answer, sources, [23.0, 1500.0]), [])
-        # A line with no citation is checked against the closest one above.
+    def test_values_read_naturally(self):
+        for field, value, expected in (
+                ("minutes", 2863, "2,863"), ("season", 2025, "2025"), ("goals_per_90", 0.2, "0.20"),
+                ("role_score", 78.4, "78.4"), ("average_team_possession_pct", 50.0, "50.0%"),
+                ("x_percentile", 1, "1st percentile"), ("x_percentile", 12, "12th percentile"),
+                ("x_percentile", 53, "53rd percentile"), ("x_percentile", 100, "100th percentile")):
+            with self.subTest(field=field, value=value):
+                self.assertEqual(show_value(field, value), expected)
+
+    def test_typed_statistics_are_found_and_other_numbers_pass(self):
+        sources = {"7:39:2025": {"player_id": 7, "league_id": 39, "season": 2025}}
+        for text in ("In 2025/26 (league 39, player 7) he ranked well per 90.",
+                     "1. He is one of 3 players, in a team in the mid-40s for possession.",
+                     "Among players under 23 with 1500 minutes, over 90 minutes."):
+            with self.subTest(text=text):
+                self.assertEqual(typed_figures(text, sources, [23.0, 1500.0]), [])
         self.assertEqual(
-            unmatched_figures("Player [7:39:2025]\nHe played 3414 minutes.", sources, []),
-            ["3414 (not in 7:39:2025)"])
+            typed_figures("He made 696 passes at 82.0%, 51st percentile, in 2,863 minutes.",
+                          sources, []),
+            ["696", "82.0%", "51", "2,863"])
 
-    def test_wrong_figure_gets_one_correction_then_a_visible_warning(self):
-        wrong, right = "Ten scored 0.75 per 90 [10:39:2025].", "Ten scored 0.57 per 90 [10:39:2025]."
+    def test_typed_figure_gets_one_correction_then_a_visible_warning(self):
+        typed = "Ten scored 0.75 per 90, or {10:39:2025 goals_per_90}."
+        marked = "Ten scored {10:39:2025 goals_per_90} per 90."
         assistant, model = self.scripted_assistant(
-            function_response(), text_response(wrong), text_response(right))
+            function_response(), text_response(typed), text_response(marked))
         with self.assertLogs("scout_backend", level="WARNING"):
             result = assistant.ask("How did player 10 score?")
-        self.assertEqual(result["answer"], right)
+        self.assertEqual(result["answer"], "Ten scored 0.57 per 90.\n\nSources: [10:39:2025]")
         self.assertEqual(result["unverified_figures"], [])
-        self.assertIn("0.75 (not in 10:39:2025)", model.requests[2]["input"][-1]["content"])
+        self.assertIn("0.75", model.requests[2]["input"][-1]["content"])
 
         assistant, model = self.scripted_assistant(
-            function_response(), text_response(wrong), text_response(wrong))
+            function_response(), text_response(typed), text_response(typed))
         with self.assertLogs("scout_backend", level="WARNING"):
             result = assistant.ask("How did player 10 score?")
         self.assertEqual(len(model.requests), 3)
-        self.assertEqual(result["unverified_figures"], ["0.75 (not in 10:39:2025)"])
-        self.assertTrue(result["answer"].startswith(wrong))
+        self.assertEqual(result["unverified_figures"], ["0.75"])
+        self.assertTrue(result["answer"].startswith("Ten scored 0.75 per 90, or 0.57."))
         self.assertIn("Not verified", result["answer"])
 
-    def test_answer_rejects_unretrieved_citation(self):
-        client = SimpleNamespace(responses=FakeResponses("Claim [99:39:2025]."))
-        assistant = ScoutAssistant(GoldRepository(lambda: FakeConnection([])),
-                                   client, "configured-model")
-        with self.assertRaisesRegex(RuntimeError, "cite retrieved"):
-            assistant.ask("How did player 10 score?")
+    def test_answer_without_a_usable_marker_is_rejected_after_one_correction(self):
+        for answer in ("Claim {99:39:2025 goals_per_90}.", "He scored a lot."):
+            with self.subTest(answer=answer):
+                assistant, model = self.scripted_assistant(
+                    function_response(), text_response(answer), text_response(answer))
+                with self.assertLogs("scout_backend", level="WARNING"):
+                    with self.assertRaisesRegex(RuntimeError, "retrieved season rows"):
+                        assistant.ask("How did player 10 score?")
+                self.assertEqual(len(model.requests), 3)
 
-    def test_follow_up_sends_earlier_turns_and_may_cite_them(self):
-        responses = FakeResponses("Ten [10:39:2025] trails Nine [9:39:2025].")
+    def test_follow_up_sends_earlier_turns_and_retrieves_again(self):
+        responses = FakeResponses("Ten scored {10:39:2025 goals_per_90}, behind Nine.")
         assistant = ScoutAssistant(GoldRepository(lambda: FakeConnection([])),
                                    SimpleNamespace(responses=responses), "configured-model")
         previous = [{"role": "user", "content": "How did player 9 score?"},
-                    {"role": "assistant", "content": "Nine scored 0.80 per 90 [9:39:2025]."}]
+                    {"role": "assistant", "content": "Nine scored 0.80 per 90.\n\nSources: [9:39:2025]"}]
 
         result = assistant.ask("And compared with player 10?", previous)
 
