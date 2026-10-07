@@ -244,6 +244,27 @@ class AssistantTests(unittest.TestCase):
                 for request in model.requests:
                     self.assertEqual(request.get("reasoning"), expected)
 
+    def test_reasoning_effort_setting_is_sent_and_widens_the_output_budget(self):
+        with patch.dict("os.environ", {"SCOUT_REASONING_EFFORT": " Medium "}):
+            assistant, model = self.scripted_assistant(
+                function_response(), incomplete_response(), text_response())
+            assistant.model = "gpt-5-mini"
+            with self.assertLogs("scout_backend", level="INFO") as logs:
+                self.assertTrue(assistant.ask("How did player 10 score?")["answer"])
+        self.assertEqual([request["reasoning"] for request in model.requests],
+                         [{"effort": "medium"}] * 3)
+        self.assertEqual([request["max_output_tokens"] for request in model.requests],
+                         [2 * MODEL_OUTPUT_TOKENS, 2 * MODEL_OUTPUT_TOKENS,
+                          2 * MODEL_RETRY_OUTPUT_TOKENS])
+        self.assertIn("effort=medium", logs.output[0])
+
+    def test_unknown_reasoning_effort_is_refused_before_any_request(self):
+        with patch.dict("os.environ", {"SCOUT_REASONING_EFFORT": "maximum"}):
+            assistant, model = self.scripted_assistant(function_response())
+            with self.assertRaisesRegex(RuntimeError, "SCOUT_REASONING_EFFORT"):
+                assistant.ask("How did player 10 score?")
+        self.assertEqual(model.requests, [])
+
     def test_openai_read_timeout_is_identified_without_repeating_the_request(self):
         requests = []
         def timed_out(request):

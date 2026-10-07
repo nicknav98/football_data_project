@@ -26,6 +26,8 @@ MAX_TOOL_CALLS = 6
 MODEL_OUTPUT_TOKENS = 4096
 MODEL_RETRY_OUTPUT_TOKENS = 8192
 MODEL_REQUEST_TIMEOUT_SECONDS = 120
+# Values of SCOUT_REASONING_EFFORT, each with the multiple of the output budgets it gets.
+REASONING_EFFORTS = {"minimal": 1, "low": 1, "medium": 2, "high": 2}
 
 SEASON_COLUMNS = """player_id, player_name, league_id, league_name, season,
     primary_position, detailed_position, team_names, matches_in_data, appearances, starts,
@@ -635,12 +637,20 @@ class ScoutAssistant:
         tool_choice = "required" if call_count == 0 else (
             "none" if call_count == MAX_TOOL_CALLS else "auto"
         )
-        for budget in (MODEL_OUTPUT_TOKENS, MODEL_RETRY_OUTPUT_TOKENS):
+        # Read on each request: .env is loaded after this module is imported.
+        effort = os.getenv("SCOUT_REASONING_EFFORT", "low").strip().lower()
+        if effort not in REASONING_EFFORTS:
+            raise RuntimeError("SCOUT_REASONING_EFFORT must be one of: "
+                               + ", ".join(REASONING_EFFORTS))
+        # Reasoning is charged against the output budget, so more of it needs more room.
+        scale = REASONING_EFFORTS[effort]
+        budgets = (MODEL_OUTPUT_TOKENS * scale, MODEL_RETRY_OUTPUT_TOKENS * scale)
+        for budget in budgets:
             options: dict[str, Any] = {}
             # Original GPT-5 models default to medium reasoning. These known
-            # aliases and dated snapshots support low effort for interactive chat.
+            # aliases and dated snapshots accept an effort; other models are sent none.
             if re.fullmatch(r"gpt-5(?:-mini|-nano)?(?:-\d{4}-\d{2}-\d{2})?", self.model):
-                options["reasoning"] = {"effort": "low"}
+                options["reasoning"] = {"effort": effort}
             started = perf_counter()
             try:
                 response = self.client.responses.create(
@@ -664,7 +674,7 @@ class ScoutAssistant:
             if status == "incomplete" and reason == "max_output_tokens":
                 LOGGER.warning("Scout model response truncated: model=%s budget=%s lookups=%s",
                                self.model, budget, call_count)
-                if budget == MODEL_OUTPUT_TOKENS:
+                if budget == budgets[0]:
                     # Discard partial output and retry the same step before executing tools.
                     continue
                 raise RuntimeError("Scouting model reached its response token limit. "
@@ -672,8 +682,9 @@ class ScoutAssistant:
             if status != "completed":
                 raise RuntimeError(f"Scouting model response was not completed ({reason or status}). "
                                    "Try rephrasing the question.")
-            LOGGER.info("Scout OpenAI response completed: model=%s elapsed=%.1fs lookups=%s",
-                        self.model, perf_counter() - started, call_count)
+            LOGGER.info("Scout OpenAI response completed: model=%s effort=%s elapsed=%.1fs "
+                        "lookups=%s", self.model, options.get("reasoning", {}).get("effort"),
+                        perf_counter() - started, call_count)
             return response
 
     def ask(self, question: str, previous: list[dict[str, str]] | None = None) -> dict[str, Any]:

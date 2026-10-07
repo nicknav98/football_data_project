@@ -16,6 +16,7 @@ Set in `.env` beside `scout_api.py`, or in the environment. Restart after a chan
 | `OPENAI_API_KEY` | OpenAI API key |
 | `OPENAI_MODEL` | Model to use |
 | `SCOUT_API_KEY` | Shared secret for `POST /scout/ask` |
+| `SCOUT_REASONING_EFFORT` | Optional. `minimal`, `low` (default), `medium` or `high`. Sent to `gpt-5`, `gpt-5-mini` and `gpt-5-nano` only. `medium` and `high` are slower, cost more, and double the output budget. |
 | `SCOUT_GOLD_SCHEMA` | Optional. Catalog and schema of the gold views. Default `workspace.football_data_project_sportmonks`. |
 
 ## Run
@@ -150,7 +151,7 @@ can then be held against the figure and its percentile.
 | Figures | Written as markers and filled in from the retrieved rows. See [Markers](#markers). The rejected text of a failed answer is logged as a warning. |
 | Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric and for passes per 90. The assistant is told to call a figure high or low from that, not from the raw number. |
 | History | The service keeps none. Send earlier turns in `history` (up to 20). |
-| Output budget | 4,096 tokens, retried once at 8,192 if truncated |
+| Output budget | 4,096 tokens, retried once at 8,192 if truncated. Doubled at `medium` or `high` reasoning effort, since reasoning counts against it. |
 | Timeout | 120 seconds, no automatic retry |
 | Not in the data | Fees, wages, contracts, scout notes. The assistant says so. |
 
@@ -162,7 +163,7 @@ or the app's URL with `/logz` added. It shows the running app, not a history.
 
 | Line | Level | Meaning |
 | --- | --- | --- |
-| `Scout OpenAI response completed: model=... elapsed=...` | Info | One per model call, with the model in use |
+| `Scout OpenAI response completed: model=... effort=... elapsed=...` | Info | One per model call, with the model and reasoning effort in use |
 | `Scout data lookup: tool=... rows=...` | Info | One per lookup |
 | `Scout answer rejected (...)` | Warning | A marker was unusable or a figure was typed; includes the answer text |
 | `Scout model response truncated` | Warning | The output budget was reached |
