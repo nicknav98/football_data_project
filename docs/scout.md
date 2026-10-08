@@ -151,6 +151,9 @@ can then be held against the figure and its percentile.
 | Data access | Four fixed read-only tools: search, seasons, leaderboard, shortlist. The model cannot write SQL. |
 | Lookups | Up to six per question |
 | Figures | Written as markers and filled in from the retrieved rows. See [Markers](#markers). The rejected text of a failed answer is logged as a warning. |
+| Weaknesses | The instructions list the statistics each role is scored on, built from `ROLE_PROFILES`. For each shortlisted player, and a player assessed alone, the assistant is told to name the one with his lowest percentile. |
+| Adjusted rates | The assistant is told not to cite raw tackles or interceptions for a role scored on the adjusted versions |
+| Possession | The assistant is told to call `average_team_possession_pct` his team's possession in the matches he played, since it is weighted by his minutes and differs between team-mates |
 | Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric and for passes per 90. The assistant is told to call a figure high or low from that, not from the raw number. |
 | History | The service keeps none. Send earlier turns in `history` (up to 20). |
 | Output budget | 4,096 tokens, retried once at 8,192 if truncated. Doubled at `medium` or `high` reasoning effort, since reasoning counts against it. |

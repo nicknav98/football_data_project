@@ -11,7 +11,7 @@ import httpx
 from openai import OpenAI
 
 from scout_backend import (
-    GoldRepository, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
+    GoldRepository, INSTRUCTIONS, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
     MODEL_RETRY_OUTPUT_TOKENS, RANK_METRICS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
     figures_table, fill_markers, show_value, typed_figures,
 )
@@ -520,6 +520,15 @@ class AssistantTests(unittest.TestCase):
         self.assertEqual(responses.requests[0]["input"][2]["content"],
                          "And compared with player 10?")
         self.assertEqual([row["source_id"] for row in result["sources"]], ["10:39:2025"])
+
+    def test_instructions_list_the_statistics_each_role_is_scored_on(self):
+        self.assertIn(
+            "defensive_mid: tackles_possession_adjusted_per_90, "
+            "interceptions_possession_adjusted_per_90, duel_win_pct, "
+            "ball_recoveries_per_90, pass_accuracy_pct, passes_per_90", INSTRUCTIONS)
+        for role in ROLE_PROFILES:
+            self.assertIn(f"\n{role}: ", INSTRUCTIONS)
+        self.assertNotIn("passes_attempted", INSTRUCTIONS)
 
 
 if __name__ == "__main__":

@@ -152,6 +152,12 @@ ROLE_PROFILES: dict[str, dict[str, Any]] = {
 }
 
 
+def role_fields(profile: dict[str, Any]) -> list[str]:
+    """The row fields a role is scored on, in the order of its weights."""
+    return ["passes_per_90" if field == PASSES_PER_90 else field
+            for field in profile["weights"]]
+
+
 def clean_value(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
@@ -434,9 +440,13 @@ closest role and describe role_score as a statistical fit, not a verdict.
 Raw tackles and interceptions per 90 favour players on teams with less of the
 ball. The possession_adjusted_per_90 versions scale each match to an opponent
 with half the ball, using the team's possession for the whole match. Role
-scores use them. Prefer them when comparing players across teams, and give
-average_team_possession_pct as context. It is the team's share of the ball,
-so 50 is an even share and a figure in the low 40s is a team that defends a lot.
+scores use them. Prefer them when comparing players across teams, and never
+cite raw tackles or interceptions for a player in a role scored on the
+adjusted versions. Give average_team_possession_pct as context. It is his
+team's share of the ball in the matches he played, weighted by his minutes, so
+two players at one club can differ. Call it his team's possession in the
+matches he played, never the club's possession. 50 is an even share and a
+figure in the low 40s is a team that defends a lot.
 Judge whether a figure is high, average or low from its _percentile, never from
 the raw number, and say which position group the percentile is among. Players
 in different positions are ranked against different groups. A null percentile
@@ -469,7 +479,13 @@ is the season starting that year. Do not describe a quality the data has no
 statistic for, such as carrying the ball. A table of the main figures for each
 season you use is added below your answer, so do not write tables yourself.
 If information is absent or coverage is incomplete, say so. Keep the answer
-concise and report the season and league for comparisons."""
+concise and report the season and league for comparisons.
+Each role is scored on the statistics listed below. For every player in a
+shortlist, and for a player you assess on his own, also name the one of his
+role's statistics with the lowest percentile, with its figure and percentile
+as markers, so the answer does not list strengths only.
+""" + "\n".join(f"{role}: {', '.join(role_fields(profile))}"
+                for role, profile in ROLE_PROFILES.items())
 
 
 def numbers_in(value: Any) -> list[float]:
@@ -563,9 +579,7 @@ def figure_fields(position: str) -> list[str]:
     """The statistics tabled for a position: those its role is scored on, and rating."""
     for profile in ROLE_PROFILES.values():
         if position in profile["positions"]:
-            fields = ["passes_per_90" if field == PASSES_PER_90 else field
-                      for field in profile["weights"]]
-            return [*fields, "average_rating"]
+            return [*role_fields(profile), "average_rating"]
     if position == "Goalkeeper":
         return ["saves_per_90", "pass_accuracy_pct", "average_rating"]
     return ["passes_per_90", "pass_accuracy_pct", "duel_win_pct", "average_rating"]
