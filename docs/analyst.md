@@ -88,6 +88,49 @@ indicator, with a tie counted as half. Higher is always better.
 Garner's adjusted tackles of 2.94 per 90 put him in the 87th percentile of 123
 defensive midfielders: above 87 in every 100 of them.
 
+## Ranges and small-sample estimates
+
+A figure from few minutes is partly luck. Two extra values say how much.
+Both are worked out when the scout looks a player up; neither is stored in gold.
+
+| Value | What it is | Shown for |
+| --- | --- | --- |
+| Range | Where the player's underlying level probably lies, from his own figure and the minutes or attempts behind it. It uses no average. Nine times in ten the level is inside it. | Every season |
+| Estimate | His figure pulled toward the average of his comparison group. The fewer his minutes, the harder the pull. | Small-sample seasons only |
+
+Both cover the per-90 counts and the four percentages (pass accuracy, duels,
+dribbles, aerials). Rating has neither.
+
+| Step | Per-90 count | Percentage |
+| --- | --- | --- |
+| Range | The 5th and 95th points of a Poisson rate for his count, by the Wilson–Hilferty approximation | Wilson's interval for successes out of attempts |
+| Group average | Total count ÷ total minutes in the comparison group | Total successes ÷ total attempts |
+| Weight of the average | Average ÷ (spread between members − spread chance alone would give), in minutes | The same, in attempts |
+| Estimate | (count + average × weight) ÷ (minutes + weight) | (successes + average × weight) ÷ (attempts + weight) |
+
+The comparison group is the one percentiles use. The weight is calculated from
+the data, separately for each indicator, position and season: an indicator on
+which players truly differ gets a small weight, and one that is mostly chance
+gets a large one. A group of fewer than 10 gives no estimate.
+
+Alex Scott's 2026/27 season so far, 447 minutes, among central midfielders:
+
+| Indicator | Figure | Range | Estimate |
+| --- | --- | --- | --- |
+| Adjusted tackles per 90 | 1.81 | 0.94 to 3.16 | 1.89 |
+| Key passes per 90 | 2.21 | 1.24 to 3.67 | 1.80 |
+| Assists per 90 | 0.00 | 0.00 to 0.60 | 0.11 |
+| Duels won % | 58.9% | 47.9% to 69.1% | 51.9% |
+
+His 2025/26 key passes, over 2,863 minutes, have a range of 0.63 to 1.21.
+
+| Caution | Detail |
+| --- | --- |
+| The estimate is cautious about outliers | A genuinely exceptional figure is pulled down like a lucky one, and the estimate can fall outside the range. Goals pull hardest. |
+| Ranges are too narrow for high-volume counts | Passes and touches vary from match to match by more than the Poisson rule assumes |
+| The average is of regulars | Players with few minutes are compared with those above the minutes floor, who are on average better |
+| Percentiles ignore both | A percentile is still the rank of the actual figure |
+
 ## How a role score is calculated
 
 A role score says how well a player's season fits one of seven roles, from 0 to
@@ -151,7 +194,7 @@ groups differ: 101 players with 1,500 minutes here, 123 players above the
 | Age | His age when the profile was fetched, not his age in the season shown |
 | Role-score percentages | No minimum-attempts guard beyond the minutes floor. Percentiles do have one. |
 | Save percentage | Saves ÷ (saves + goals conceded). Not adjusted for shot quality. |
-| One season at a time | A percentile describes one season. It is not a forecast. |
+| One season at a time | A percentile describes one season. It is not a forecast, and neither is a small-sample estimate: it says what the season so far supports. |
 
 ## Where to look next
 

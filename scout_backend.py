@@ -95,6 +95,92 @@ def percentile_columns() -> list[str]:
         columns.append(f"cast(round(100 * avg({rank})) AS INT) AS {metric}_percentile")
     return columns
 
+
+# A figure from few minutes is mostly noise, so each row also carries an
+# estimate that pulls the figure toward the average of the same comparison
+# group, and a range around that estimate. A count per 90 is (count, minutes
+# it was recorded in); a percentage is (successes, attempts, fewest attempts
+# for a group member to count). Rating has no attempts, so it gets neither.
+ESTIMATE_RATES = {
+    **{metric: (metric.removesuffix("_per_90"), minutes) for metric, minutes in PER_90_COVERAGE.items()},
+    "passes_per_90": ("passes_attempted", "minutes"),
+}
+ESTIMATE_RATIOS = {
+    metric: ("accurate_passes" if metric == "pass_accuracy_pct" else f"{metric} * {attempts} / 100.0",
+             attempts, minimum)
+    for metric, (attempts, minimum) in RATIO_COVERAGE.items() if metric.endswith("_pct")
+}
+ESTIMATE_METRICS = sorted([*ESTIMATE_RATES, *ESTIMATE_RATIOS])
+# The range holds the player's underlying level nine times in ten.
+ESTIMATE_RANGE_Z = 1.645
+# A group smaller than this gives no usable average, so its rows get no estimate.
+ESTIMATE_MIN_GROUP = 10
+# The weight given to the group average when its members do not differ by more
+# than chance: large enough that the estimate is the average.
+ESTIMATE_FULL_WEIGHT = 1e9
+
+
+def estimate_columns() -> tuple[list[str], list[str], list[str]]:
+    """SQL for the estimates, in three steps.
+
+    The first list summarises each comparison group. The second turns that into
+    the group average and its weight: the minutes, or attempts, of evidence the
+    average is worth, found by taking the spread expected from chance alone
+    away from the spread seen between members. The third applies both to a row.
+    """
+    group, priors, final = [], [], []
+    for index, metric in enumerate(ESTIMATE_METRICS):
+        ratio = metric in ESTIMATE_RATIOS
+        if ratio:
+            count, exposure, minimum = ESTIMATE_RATIOS[metric]
+            usable = f"{metric} IS NOT NULL AND {exposure} >= {minimum}"
+        else:
+            count, exposure = ESTIMATE_RATES[metric]
+            usable = f"{count} IS NOT NULL AND {exposure} > 0"
+        count, exposure = f"cast({count} AS DOUBLE)", f"cast({exposure} AS DOUBLE)"
+        mean, weight = f"mean_{index}", f"weight_{index}"
+        group.append(
+            f"try_divide(sum(CASE WHEN {usable} THEN {count} END), "
+            f"sum(CASE WHEN {usable} THEN {exposure} END)) AS {mean}, "
+            f"var_samp(CASE WHEN {usable} THEN try_divide({count}, {exposure}) END) AS var_{index}, "
+            f"avg(CASE WHEN {usable} THEN try_divide(1, {exposure}) END) AS inv_{index}, "
+            f"count_if({usable}) AS n_{index}")
+        # Chance alone spreads a count per minute by mean / minutes, and a
+        # share by mean * (1 - mean) / attempts.
+        chance = f"{mean} * (1 - {mean})" if ratio else mean
+        between = f"(var_{index} - {chance} * inv_{index})"
+        evidence = f"greatest({chance} / {between} - 1, 0)" if ratio else f"{chance} / {between}"
+        priors.append(
+            f"CASE WHEN n_{index} >= {ESTIMATE_MIN_GROUP} THEN {mean} END AS {mean}, "
+            f"CASE WHEN {between} > 0 THEN {evidence} ELSE {ESTIMATE_FULL_WEIGHT} END AS {weight}")
+        # The range is around the figure itself and uses no average: Wilson's
+        # interval for a share, and for a count the gamma quantiles that bound
+        # a Poisson rate, by the Wilson-Hilferty cube.
+        z = ESTIMATE_RANGE_Z
+        if ratio:
+            # No attempts is no share and no range.
+            attempts = f"nullif({exposure}, 0)"
+            share = f"{count} / {attempts}"
+            middle = f"({share} + {z * z / 2} / {attempts}) / (1 + {z * z} / {attempts})"
+            half = (f"{z} * sqrt({share} * (1 - {share}) / {attempts} + {z * z / 4} "
+                    f"/ pow({attempts}, 2)) / (1 + {z * z} / {attempts})")
+            final += [f"round(100 * try_divide({count} + {mean} * {weight}, {exposure} + {weight}), 1) "
+                      f"AS {metric}_estimate",
+                      f"round(100 * ({middle} - {half}), 1) AS {metric}_low",
+                      f"round(100 * ({middle} + {half}), 1) AS {metric}_high"]
+        else:
+            quantile = "{shape} * pow(1 - 1 / (9 * {shape}) {sign} " + f"{z}" + " / (3 * sqrt({shape})), 3)"
+            low = quantile.format(shape=f"nullif({count}, 0)", sign="-")
+            final += [f"round(90 * try_divide({count} + {mean} * {weight}, {exposure} + {weight}), 2) "
+                      f"AS {metric}_estimate",
+                      # No events is a floor of none; a cube below zero is too.
+                      f"round(90 * try_divide(CASE WHEN {count} <= 0 THEN 0 WHEN {low} < 0 THEN 0 "
+                      f"ELSE {low} END, "
+                      f"{exposure}), 2) AS {metric}_low",
+                      f"round(90 * try_divide({quantile.format(shape=f'({count} + 1)', sign='+')}, "
+                      f"{exposure}), 2) AS {metric}_high"]
+    return group, priors, final
+
 # Each role scores the players whose usual position, from their Sportmonks
 # profile, is one of "positions". The score is a weighted sum of percentile
 # ranks among those players. The keys of "weights" are fixed SQL expressions
@@ -156,6 +242,20 @@ def role_fields(profile: dict[str, Any]) -> list[str]:
     """The row fields a role is scored on, in the order of its weights."""
     return ["passes_per_90" if field == PASSES_PER_90 else field
             for field in profile["weights"]]
+
+
+def lowest_role_field(row: dict[str, Any]) -> str | None:
+    """The statistic of the row's role with its lowest percentile, the first if level.
+
+    Worked out here because a model picking the lowest of several numbers gets
+    it wrong some of the time.
+    """
+    for profile in ROLE_PROFILES.values():
+        if row.get("detailed_position") in profile["positions"]:
+            ranked = [field for field in role_fields(profile)
+                      if row.get(f"{field}_percentile") is not None]
+            return min(ranked, key=lambda field: row[f"{field}_percentile"], default=None)
+    return None
 
 
 def clean_value(value: Any) -> Any:
@@ -262,7 +362,8 @@ class GoldRepository:
         so a row has the same percentiles whichever tool returned it.
         """
         percentiles = ", ".join(f"{metric}_percentile" for metric in PERCENTILE_METRICS)
-        return self._query(
+        group, priors, estimates = estimate_columns()
+        rows = self._query(
             f"""WITH seasons AS (
                     SELECT *, max(minutes) OVER (PARTITION BY season)
                                   * {PERCENTILE_POOL_MINUTES_SHARE} AS pool_min_minutes,
@@ -278,17 +379,41 @@ class GoldRepository:
                         AND q.detailed_position = p.detailed_position
                         AND q.minutes >= q.pool_min_minutes
                     GROUP BY p.player_id, p.league_id, p.season
+                ), pool AS (
+                    SELECT season, detailed_position, {', '.join(group)}
+                    FROM seasons
+                    WHERE minutes >= pool_min_minutes
+                    GROUP BY season, detailed_position
+                ), priors AS (
+                    SELECT season, detailed_position, {', '.join(priors)}
+                    FROM pool
                 )
                 SELECT {SEASON_COLUMNS}, passes_per_90, {extra}
                        coalesce(minutes, 0) < greatest(pool_min_minutes, {SMALL_SAMPLE_MINUTES})
                            AS small_sample,
                        percentile_pool_size,
                        cast(ceil(pool_min_minutes) AS INT) AS percentile_pool_min_minutes,
-                       {percentiles}
+                       {percentiles},
+                       {', '.join(estimates)}
                 FROM picked LEFT JOIN ranked USING (player_id, league_id, season)
+                    LEFT JOIN priors USING (season, detailed_position)
                 ORDER BY {order_by}""",
             parameters,
         )
+        for row in rows:
+            if "detailed_position" in row:
+                row["lowest_role_field"] = lowest_role_field(row)
+            for metric in ESTIMATE_METRICS:
+                # An estimate differs from the figure only when minutes are few,
+                # so only those rows keep one.
+                if not row.get("small_sample"):
+                    row.pop(f"{metric}_estimate", None)
+                # A range reads as one value, so the model has one marker to write for it.
+                if f"{metric}_low" in row:
+                    low, high = row.pop(f"{metric}_low"), row.pop(f"{metric}_high")
+                    row[f"{metric}_range"] = None if low is None or high is None else (
+                        f"{show_value(metric, low)} to {show_value(metric, high)}")
+        return rows
 
     def player_seasons(self, player_id: int) -> list[dict[str, Any]]:
         args = PlayerArgs(player_id=player_id)
@@ -452,6 +577,17 @@ the raw number, and say which position group the percentile is among. Players
 in different positions are ranked against different groups. A null percentile
 means too few attempts to rank. If a row's small_sample is true, say in plain
 words that the minutes are too few to rank reliably.
+Each per-90 and percentage statistic has a _range field, such as
+tackles_per_90_range: where the player's underlying level probably lies, given
+the minutes or attempts the figure rests on. Its marker reads like "1.24 to
+3.67". Give the range with every figure you cite from a small_sample row, and
+when two players' figures are close, where you say the gap may be chance.
+A small_sample row also has an _estimate field for each of those statistics,
+such as tackles_per_90_estimate: the figure pulled toward the average for the
+position, more strongly the fewer the minutes. Give it beside the actual
+figure, never in its place, and call it an estimate that allows for the few
+minutes. Other rows have no _estimate fields. Percentiles are of the actual
+figure. Rating has neither a range nor an estimate.
 The data has no transfer fees, market values, wages, or contracts, so say
 that a budget cannot be checked against it. Earlier turns of the conversation
 give context for follow-up questions; retrieve data again before answering.
@@ -480,10 +616,13 @@ statistic for, such as carrying the ball. A table of the main figures for each
 season you use is added below your answer, so do not write tables yourself.
 If information is absent or coverage is incomplete, say so. Keep the answer
 concise and report the season and league for comparisons.
-Each role is scored on the statistics listed below. For every player in a
-shortlist, and for a player you assess on his own, also name the one of his
-role's statistics with the lowest percentile, with its figure and percentile
-as markers, so the answer does not list strengths only.
+Each role is scored on the statistics listed below. A row's lowest_role_field
+is the field name of the one with his lowest percentile that season, already
+worked out. For every player in a shortlist or a comparison, and for a player
+you assess on his own, name that statistic as his lowest-ranked role measure,
+with its figure and percentile as markers, so the answer does not list
+strengths only. Never choose it yourself, and write no marker for
+lowest_role_field itself. If it is null, say nothing about a lowest measure.
 """ + "\n".join(f"{role}: {', '.join(role_fields(profile))}"
                 for role, profile in ROLE_PROFILES.items())
 
@@ -526,6 +665,8 @@ def show_value(field: str, value: Any) -> str:
         return "not available"
     if isinstance(value, list):
         return ", ".join(str(item) for item in value)
+    # An estimate reads like the statistic it estimates.
+    field = field.removesuffix("_estimate")
     if field.endswith("_percentile"):
         return f"{ordinal(value)} percentile ({level(value)})"
     if field.endswith("_pct"):
