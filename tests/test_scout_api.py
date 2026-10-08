@@ -38,6 +38,7 @@ class ScoutApiTests(unittest.TestCase):
     def setUp(self):
         scout_api.app.dependency_overrides[scout_api.repository] = FakeRepository
         self.client = TestClient(scout_api.app)
+        scout_api.QUESTION_TIMES.clear()
 
     def tearDown(self):
         scout_api.app.dependency_overrides.clear()
@@ -102,7 +103,51 @@ with patch('openai.OpenAI'):
                     )
                     self.assertEqual(result.returncode, 0, result.stderr)
 
-    def test_public_data_routes_and_validation(self):
+    def test_data_routes_need_the_key_and_only_health_and_metrics_are_open(self):
+        routes = ("/players?name=Ten", "/players/10/seasons", "/leaderboard?metric=goals_per_90",
+                  "/shortlist?role=defensive_mid&season=2025")
+        with patch.dict(os.environ, {"SCOUT_API_KEY": "private-token"}):
+            for route in routes:
+                self.assertEqual(self.client.get(route).status_code, 401, route)
+                self.assertEqual(self.client.get(
+                    route, headers={"X-Scout-API-Key": "wrong"}).status_code, 401, route)
+                self.assertEqual(self.client.get(
+                    route, headers={"X-Scout-API-Key": "private-token"}).status_code, 200, route)
+            self.assertEqual(self.client.get("/health").status_code, 200)
+            self.assertEqual(self.client.get("/metrics").status_code, 200)
+        # With no key configured the data routes are closed, not open.
+        environment = {key: value for key, value in os.environ.items() if key != "SCOUT_API_KEY"}
+        with patch.dict(os.environ, environment, clear=True):
+            for route in routes:
+                self.assertEqual(self.client.get(route).status_code, 503, route)
+
+    def test_questions_are_capped_by_the_hour_for_the_api_and_the_chat(self):
+        body = {"question": "Compare these player seasons"}
+        headers = {"X-Scout-API-Key": "private-token"}
+        settings = {"SCOUT_API_KEY": "private-token", "SCOUT_HOURLY_QUESTION_LIMIT": "2"}
+        with patch.dict(os.environ, settings), \
+                patch.object(scout_api, "assistant", return_value=FakeAssistant()), \
+                patch.object(scout_api, "monotonic", return_value=1000.0) as clock:
+            self.assertEqual(self.client.post("/scout/ask", json=body, headers=headers).status_code, 200)
+            # The chat calls ask() directly and shares the count.
+            scout_api.ask("Compare these player seasons", [])
+            limited = self.client.post("/scout/ask", json=body, headers=headers)
+            self.assertEqual(limited.status_code, 429)
+            self.assertIn("2 questions an hour", limited.json()["detail"])
+            with self.assertRaises(scout_api.QuestionLimitReached):
+                scout_api.ask("Compare these player seasons", [])
+            # An hour on, the count is clear, and a wrong key does not use it up.
+            clock.return_value = 1000.0 + 3600
+            for _ in range(5):
+                self.client.post("/scout/ask", json=body, headers={"X-Scout-API-Key": "wrong"})
+            self.assertEqual(self.client.post("/scout/ask", json=body, headers=headers).status_code, 200)
+        with patch.dict(os.environ, {"SCOUT_HOURLY_QUESTION_LIMIT": "many"}), \
+                self.assertRaises(RuntimeError):
+            scout_api.ask("Compare these player seasons", [])
+
+    def test_data_routes_and_validation(self):
+        self.enterContext(patch.dict(os.environ, {"SCOUT_API_KEY": "private-token"}))
+        self.client.headers["X-Scout-API-Key"] = "private-token"
         self.assertEqual(self.client.get("/health").json(), {"status": "ok"})
         self.assertIn("goals_per_90", self.client.get("/metrics").json()["ranking_metrics"])
         self.assertEqual(self.client.get("/players?name=Ten").json()["players"][0]["player_id"], 10)

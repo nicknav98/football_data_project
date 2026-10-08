@@ -15,7 +15,8 @@ Set in `.env` beside `scout_api.py`, or in the environment. Restart after a chan
 | `DATABRICKS_TOKEN` | Token with `SELECT` on the two gold objects |
 | `OPENAI_API_KEY` | OpenAI API key |
 | `OPENAI_MODEL` | Model to use |
-| `SCOUT_API_KEY` | Shared secret for `POST /scout/ask` |
+| `SCOUT_API_KEY` | Shared secret for every API route that reads data or asks the assistant. Without it those routes return 503. |
+| `SCOUT_HOURLY_QUESTION_LIMIT` | Optional. Questions the assistant answers in an hour, for the API and the chat together, counted per running process. Default 60. |
 | `SCOUT_REASONING_EFFORT` | Optional. `minimal`, `low` (default), `medium` or `high`. Sent to `gpt-5`, `gpt-5-mini` and `gpt-5-nano` only. `medium` and `high` are slower, cost more, and double the output budget. |
 | `SCOUT_GOLD_SCHEMA` | Optional. Catalog and schema of the gold views. Default `workspace.football_data_project_sportmonks`. |
 
@@ -41,7 +42,7 @@ python -m streamlit run scout_chat_app.py   # chat
 | `POST /scout/ask` | An answer and the season rows behind it | `question`, optional `history`; header `X-Scout-API-Key` |
 
 ```bash
-curl 'http://localhost:8000/shortlist?role=defensive_mid&season=2025&max_age=24&exclude_team=Chelsea'
+curl 'http://localhost:8000/shortlist?role=defensive_mid&season=2025&max_age=24&exclude_team=Chelsea' \n  -H "X-Scout-API-Key: $SCOUT_API_KEY"
 curl -X POST 'http://localhost:8000/scout/ask' \
   -H "X-Scout-API-Key: $SCOUT_API_KEY" -H 'Content-Type: application/json' \
   -d '{"question":"Shortlist defensive midfielders under 24 for the 2025 season."}'
@@ -197,8 +198,12 @@ or the app's URL with `/logz` added. It shows the running app, not a history.
 
 | Surface | Protection |
 | --- | --- |
-| `POST /scout/ask` | `SCOUT_API_KEY`. Keep it server-side. |
-| Other endpoints | None |
-| Chat app | None. It calls the assistant in its own process and ignores `SCOUT_API_KEY`. Put it behind a sign-in. |
+| `POST /scout/ask`, `/players`, `/players/{player_id}/seasons`, `/leaderboard`, `/shortlist` | `SCOUT_API_KEY` in the `X-Scout-API-Key` header. Keep it server-side. With no key set they return 503. |
+| `/health`, `/metrics` | None. They read no data. |
+| Chat, as the Databricks App | The workspace sign-in. Only users granted permission on the app reach it. |
+| Chat, run locally | `.streamlit/config.toml` makes it listen on this machine only. It has no sign-in of its own and ignores `SCOUT_API_KEY`, so do not start it with another `--server.address`. |
+| Questions | `SCOUT_HOURLY_QUESTION_LIMIT` caps them for the API and the chat together. The API answers 429 at the limit. The count is per running process and resets on a restart. |
 
-Add user rate limits and a spending cap before any public use.
+`uvicorn` also listens on this machine only unless `--host` is given. The
+repository holds no keys: `.env` is ignored by git, so a copy of this code
+runs only on the keys of whoever runs it.

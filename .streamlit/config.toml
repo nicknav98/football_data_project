@@ -1,0 +1,6 @@
+# A local run answers only this machine. Streamlit otherwise listens on every
+# network interface, so anyone on the same network could use the chat, and the
+# keys in .env, without signing in. app.yaml overrides this for the Databricks
+# App, where the workspace sign-in sits in front.
+[server]
+address = "localhost"

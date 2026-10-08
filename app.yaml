@@ -4,3 +4,7 @@ command:
   - scout_chat_app.py
   - --server.port
   - "8000"
+  # .streamlit/config.toml keeps a local run on this machine; the app's proxy
+  # reaches it over the network.
+  - --server.address
+  - "0.0.0.0"
