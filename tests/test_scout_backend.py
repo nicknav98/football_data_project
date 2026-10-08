@@ -11,7 +11,8 @@ import httpx
 from openai import OpenAI
 
 from scout_backend import (
-    GoldRepository, INSTRUCTIONS, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
+    ESTIMATE_METRICS, GoldRepository, INSTRUCTIONS,
+    lowest_role_field, LeaderboardArgs, MAX_TOOL_CALLS, MODEL_OUTPUT_TOKENS,
     MODEL_RETRY_OUTPUT_TOKENS, RANK_METRICS, ROLE_PROFILES, ScoutAssistant, ShortlistArgs,
     figures_table, fill_markers, show_value, typed_figures,
 )
@@ -183,6 +184,68 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn("passes_per_90_percentile", tail)
         self.assertTrue(self.capture[2][0].rstrip().endswith(
             "ORDER BY role_score DESC, minutes DESC, player_id"))
+
+    def test_every_lookup_estimates_each_rate_and_percentage_from_its_group(self):
+        self.repo.player_seasons(10)
+        self.repo.leaderboard(LeaderboardArgs(metric="goals_per_90", league_id=None,
+                                              season=2025, min_minutes=450, limit=5))
+        self.repo.shortlist(ShortlistArgs(role="striker", season=2025, league_id=None,
+                                          max_age=None, min_minutes=900, exclude_team=None, limit=5))
+        for statement, _ in self.capture:
+            for metric in ESTIMATE_METRICS:
+                for part in ("estimate", "low", "high"):
+                    self.assertEqual(statement.count(f"AS {metric}_{part}"), 1, metric)
+            # The average comes from the group the percentiles use.
+            group = statement.split("), pool AS (")[1].split("), priors AS (")[0]
+            self.assertIn("WHERE minutes >= pool_min_minutes", group)
+            self.assertIn("GROUP BY season, detailed_position", group)
+            self.assertIn("LEFT JOIN priors USING (season, detailed_position)", statement)
+        self.assertEqual(len(ESTIMATE_METRICS), 19)
+        self.assertNotIn("average_rating", ESTIMATE_METRICS)
+        # A percentage's group members need the attempts its percentile needs.
+        self.assertIn("duel_win_pct IS NOT NULL AND duels_with_won_data >= 20", self.capture[0][0])
+        # No attempts and no events must not divide by zero.
+        self.assertIn("nullif(cast(duels_with_won_data AS DOUBLE), 0)", self.capture[0][0])
+        self.assertIn("nullif(cast(goals AS DOUBLE), 0)", self.capture[0][0])
+
+    def test_range_is_one_value_and_only_small_samples_keep_an_estimate(self):
+        columns = ["player_id", "league_id", "season", "small_sample", "duel_win_pct_estimate",
+                   "duel_win_pct_low", "duel_win_pct_high", "goals_per_90_estimate",
+                   "goals_per_90_low", "goals_per_90_high"]
+        found = [(10, 39, 2026, True, 51.9, 47.9, 69.1, 0.12, 0.01, 0.95),
+                 (10, 39, 2025, False, 54.3, 51.1, 60.0, 0.1, None, None)]
+        with patch.object(FakeCursor, "description", [(column,) for column in columns]), \
+                patch.object(FakeCursor, "fetchall", lambda self: found):
+            small, full = self.repo.player_seasons(10)
+        self.assertEqual(small["duel_win_pct_range"], "47.9% to 69.1%")
+        self.assertEqual(small["goals_per_90_range"], "0.01 to 0.95")
+        self.assertEqual(small["duel_win_pct_estimate"], 51.9)
+        self.assertEqual(full["duel_win_pct_range"], "51.1% to 60.0%")
+        self.assertIsNone(full["goals_per_90_range"])
+        self.assertNotIn("duel_win_pct_estimate", full)
+        self.assertNotIn("duel_win_pct_low", small)
+        self.assertEqual(show_value("duel_win_pct_estimate", 51.9), "51.9%")
+        self.assertEqual(show_value("goals_per_90_estimate", 0.12), "0.12")
+
+    def test_lowest_role_field_is_chosen_by_code_from_the_role_percentiles(self):
+        scott = {"detailed_position": "Central Midfield", "key_passes_per_90_percentile": 35,
+                 "passes_final_third_per_90_percentile": 55, "passes_per_90_percentile": 52,
+                 "pass_accuracy_pct_percentile": 45, "duel_win_pct_percentile": None,
+                 # Not a central midfield statistic, so it is not considered.
+                 "goals_per_90_percentile": 3, "average_rating_percentile": 1}
+        self.assertEqual(lowest_role_field(scott), "key_passes_per_90")
+        # Level percentiles go to the statistic with the larger weight.
+        self.assertEqual(lowest_role_field({**scott, "passes_per_90_percentile": 35}),
+                         "key_passes_per_90")
+        self.assertIsNone(lowest_role_field({"detailed_position": "Central Midfield"}))
+        self.assertIsNone(lowest_role_field({"detailed_position": "Goalkeeper",
+                                             "pass_accuracy_pct_percentile": 10}))
+        columns = ["player_id", "league_id", "season", "detailed_position",
+                   "tackles_possession_adjusted_per_90_percentile", "passes_per_90_percentile"]
+        with patch.object(FakeCursor, "description", [(column,) for column in columns]),                 patch.object(FakeCursor, "fetchall",
+                             lambda self: [(10, 39, 2025, "Defensive Midfield", 87, 48)]):
+            self.assertEqual(self.repo.player_seasons(10)[0]["lowest_role_field"], "passes_per_90")
+        self.assertIn("lowest_role_field", INSTRUCTIONS)
 
     def test_role_weights_sum_to_one(self):
         for role, profile in ROLE_PROFILES.items():

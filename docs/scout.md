@@ -104,6 +104,25 @@ group the player is above, with a tie counted as half.
 A shortlist's `role_score` ranks only players with the requested `min_minutes`,
 so it uses a different group from these percentiles.
 
+## Ranges and estimates
+
+Every season row, from all three lookups, also carries a range and, when it is
+a small sample, an estimate. They are computed in the lookup query by
+`estimate_columns` in `scout_backend.py`, so no gold change is needed. The
+method is in [Statistical method](analyst.md#ranges-and-small-sample-estimates).
+
+| Field | On | Meaning |
+| --- | --- | --- |
+| `<metric>_range` | Every row | Text such as `1.24 to 3.67`: where the underlying level probably lies, nine times in ten. Null with no events recorded or no attempts. |
+| `<metric>_estimate` | Rows with `small_sample` true | The figure pulled toward the average of the percentile comparison group. Null when that group has fewer than 10 usable members. |
+
+`<metric>` is each per-90 ranking metric, `passes_per_90`, and the four
+percentages: 19 in all. `average_rating` has neither. The assistant is told to
+give the range with any small-sample figure and when two figures are close, and
+to give an estimate beside the actual figure, never in its place.
+
+The extra fields make each row sent to the model about half as large again.
+
 ## Markers
 
 The model does not type statistics. Where a figure belongs it writes a marker,
@@ -151,7 +170,7 @@ can then be held against the figure and its percentile.
 | Data access | Four fixed read-only tools: search, seasons, leaderboard, shortlist. The model cannot write SQL. |
 | Lookups | Up to six per question |
 | Figures | Written as markers and filled in from the retrieved rows. See [Markers](#markers). The rejected text of a failed answer is logged as a warning. |
-| Weaknesses | The instructions list the statistics each role is scored on, built from `ROLE_PROFILES`. For each shortlisted player, and a player assessed alone, the assistant is told to name the one with his lowest percentile. |
+| Weaknesses | Each row carries `lowest_role_field`: the field name of the role statistic with the row's lowest percentile, chosen by `lowest_role_field` in `scout_backend.py`, the heavier-weighted one if two are level. Null for a position with no role. The assistant is told to name that statistic for each player in a shortlist or comparison, and for a player assessed alone, and not to choose one itself. |
 | Adjusted rates | The assistant is told not to cite raw tackles or interceptions for a role scored on the adjusted versions |
 | Possession | The assistant is told to call `average_team_possession_pct` his team's possession in the matches he played, since it is weighted by his minutes and differs between team-mates |
 | Percentiles | Season rows carry a 0 to 100 percentile for each ranking metric and for passes per 90. The assistant is told to call a figure high or low from that, not from the raw number. |
