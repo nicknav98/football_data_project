@@ -11,7 +11,7 @@ assistant.
 | 2. Bronze | Copy the files into Databricks volumes and load them into tables. | `databricks_*.py`, run by the Sportmonks Ingest job |
 | 3. Silver | Clean and type one row per player per match. | `Silver Layer Matchday Stats By League.ipynb` |
 | 4. Gold | Summarise each player's season: totals, per 90 rates, percentages. | `databricks_gold_player_summaries.sql` |
-| 5. Scout | Answer scouting questions from gold, over HTTP or chat. | `scout_api.py`, `scout_backend.py`, `scout_chat_app.py` |
+| 5. Scout | Answer scouting questions from gold, over HTTP or chat. | `scout_api.py`, `scout_backend.py`, `scout_charts.py`, `scout_chat_app.py` |
 
 ## Coverage
 
