@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections import deque
 from functools import lru_cache
 import logging
 import os
 from pathlib import Path
 import secrets
+from threading import Lock
+from time import monotonic
 from typing import Literal
 
 import httpx
@@ -68,6 +71,32 @@ def assistant() -> ScoutAssistant:
     return ScoutAssistant(repository(), client, model)
 
 
+class QuestionLimitReached(RuntimeError):
+    pass
+
+
+# When this process answered its recent questions. Each one spends model tokens,
+# so the count is capped whoever is asking and through whichever door.
+QUESTION_TIMES: deque[float] = deque()
+QUESTION_LOCK = Lock()
+
+
+def ask(question: str, previous: list[dict[str, str]]) -> dict:
+    """Answer a question within the hourly limit. The API and the chat both call this."""
+    setting = os.getenv("SCOUT_HOURLY_QUESTION_LIMIT", "60").strip()
+    if not setting.isdigit():
+        raise RuntimeError("SCOUT_HOURLY_QUESTION_LIMIT must be a whole number")
+    now = monotonic()
+    with QUESTION_LOCK:
+        while QUESTION_TIMES and now - QUESTION_TIMES[0] >= 3600:
+            QUESTION_TIMES.popleft()
+        if len(QUESTION_TIMES) >= int(setting):
+            raise QuestionLimitReached(
+                f"The limit of {setting} questions an hour has been reached. Try again later.")
+        QUESTION_TIMES.append(now)
+    return assistant().ask(question, previous)
+
+
 def require_scout_key(x_scout_api_key: str | None = Header(default=None)) -> None:
     expected = os.getenv("SCOUT_API_KEY")
     if not expected:
@@ -86,7 +115,7 @@ def metrics() -> dict[str, list[str]]:
     return {"ranking_metrics": sorted(RANK_METRICS), "roles": sorted(ROLE_PROFILES)}
 
 
-@app.get("/players")
+@app.get("/players", dependencies=[Depends(require_scout_key)])
 def search_players(
     name: str = Query(min_length=2, max_length=80),
     limit: int = Query(default=10, ge=1, le=10),
@@ -100,7 +129,7 @@ def search_players(
         raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
 
 
-@app.get("/players/{player_id}/seasons")
+@app.get("/players/{player_id}/seasons", dependencies=[Depends(require_scout_key)])
 def player_seasons(player_id: int, store: GoldRepository = Depends(repository)) -> dict:
     if player_id <= 0:
         raise HTTPException(status_code=422, detail="player_id must be positive")
@@ -113,7 +142,7 @@ def player_seasons(player_id: int, store: GoldRepository = Depends(repository)) 
     return {"seasons": rows}
 
 
-@app.get("/leaderboard")
+@app.get("/leaderboard", dependencies=[Depends(require_scout_key)])
 def leaderboard(
     metric: str,
     league_id: int | None = None,
@@ -132,7 +161,7 @@ def leaderboard(
         raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
 
 
-@app.get("/shortlist")
+@app.get("/shortlist", dependencies=[Depends(require_scout_key)])
 def shortlist(
     role: str,
     season: int,
@@ -158,6 +187,8 @@ def shortlist(
 def ask_scout(question: ScoutQuestion) -> dict:
     try:
         previous = [turn.model_dump() for turn in question.history]
-        return assistant().ask(question.question, previous)
+        return ask(question.question, previous)
+    except QuestionLimitReached as exc:
+        raise HTTPException(status_code=429, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Scouting assistant is unavailable") from exc

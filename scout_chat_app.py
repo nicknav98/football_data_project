@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import streamlit as st
 
-from scout_api import assistant
+from scout_api import ask
 
 
 # Earlier turns sent with each question, matching the limit in scout_api.
@@ -38,7 +38,7 @@ if question:
                 for turn in turns[-HISTORY_TURNS:]]
     try:
         with st.spinner("Checking the data..."):
-            result = assistant().ask(question, previous)
+            result = ask(question, previous)
     except Exception as exc:
         st.error(f"The scouting assistant could not answer: {exc}")
         st.stop()
