@@ -2,7 +2,7 @@
 
 A scouting assistant for five European football leagues: from a sports data
 API, through a Databricks lakehouse, to a chat that answers questions such as
-"Compare Alex Scott to James Garner" with quoted statistcs and data look ups enriching chat feedback. 
+"Compare Alex Scott to James Garner" with quoted statistics and data lookups enriching chat feedback. 
 
 Built from 2026-09-04 to 2026-10-14. The project is now paused: it ran on a
 Sportmonks trial, and the data stops at the sixth matchday of 2026/27.
@@ -19,10 +19,10 @@ Sportmonks trial, and the data stops at the sixth matchday of 2026/27.
 
 ## The problem
 
-Football statistics are easy to collect, but storing them, continously syncing the latest statistics and applying them correctly is the hard part. A player who
+Football statistics are easy to collect, but storing them, continuously syncing the latest statistics and applying them correctly is the hard part. A player who
 scored twice in 200 minutes looks better than one who scored 20 in a season.
 A defender at a team that rarely has the ball makes more tackles without being
-better at tackling - a language model asked to compare two players will struggle with these discrepencies. 
+better at tackling - a language model asked to compare two players will struggle with these discrepancies. 
 
 I wanted a tool that answers a scout's question in plain language, where every
 figure is correct, fair to compare, and honest about how much it can be
@@ -32,7 +32,7 @@ trusted. This was also a practice project for my Professional Databricks Data En
 
 | Step | What happens |
 | --- | --- |
-| 1. Sync | A Python client fetches fixtures , player match statistics and profiles from Sportmonks, and writes the CSV files to S3. A scheduled task runs it every three hours and only fetches what changed. |
+| 1. Sync | A Python client fetches fixtures, player match statistics and profiles from Sportmonks, and writes the CSV files to S3. A scheduled task runs it every three hours and only fetches what changed. |
 | 2. Bronze | A daily Databricks job copies the files into Unity Catalog volumes and loads them into tables, with schema evolution for new columns. |
 | 3. Silver | One clean, typed row per player per match, with rows that fail quality checks flagged rather than dropped. |
 | 4. Gold | One row per player, league and season: totals, per-90 rates, percentages, and possession-adjusted defensive rates. |
