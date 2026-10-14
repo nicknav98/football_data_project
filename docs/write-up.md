@@ -2,7 +2,7 @@
 
 A scouting assistant for five European football leagues: from a sports data
 API, through a Databricks lakehouse, to a chat that answers questions such as
-"Compare Alex Scott to James Garner" with figures it cannot get wrong.
+"Compare Alex Scott to James Garner" with quoted statistcs and data look ups enriching chat feedback. 
 
 Built from 2026-09-04 to 2026-10-14. The project is now paused: it ran on a
 Sportmonks trial, and the data stops at the sixth matchday of 2026/27.
@@ -19,21 +19,20 @@ Sportmonks trial, and the data stops at the sixth matchday of 2026/27.
 
 ## The problem
 
-Football statistics are easy to collect and easy to misuse. A player who
+Football statistics are easy to collect, but storing them, continously syncing the latest statistics and applying them correctly is the hard part. A player who
 scored twice in 200 minutes looks better than one who scored 20 in a season.
 A defender at a team that rarely has the ball makes more tackles without being
-better at tackling. And a language model asked to compare two players will
-happily invent a number.
+better at tackling - a language model asked to compare two players will struggle with these discrepencies. 
 
 I wanted a tool that answers a scout's question in plain language, where every
 figure is correct, fair to compare, and honest about how much it can be
-trusted.
+trusted. This was also a practice project for my Professional Databricks Data Engineer Certificate. 
 
 ## What I built
 
 | Step | What happens |
 | --- | --- |
-| 1. Sync | A Python client fetches fixtures, player match statistics and profiles from Sportmonks, and writes CSV files to S3. A Windows scheduled task runs it every three hours and only fetches what changed. |
+| 1. Sync | A Python client fetches fixtures , player match statistics and profiles from Sportmonks, and writes the CSV files to S3. A scheduled task runs it every three hours and only fetches what changed. |
 | 2. Bronze | A daily Databricks job copies the files into Unity Catalog volumes and loads them into tables, with schema evolution for new columns. |
 | 3. Silver | One clean, typed row per player per match, with rows that fail quality checks flagged rather than dropped. |
 | 4. Gold | One row per player, league and season: totals, per-90 rates, percentages, and possession-adjusted defensive rates. |
@@ -47,7 +46,7 @@ development and production targets.
 ### The model never types a number
 
 Early answers from the chat got figures wrong or rounded them oddly. Instead of
-asking the model to be more careful, I took the numbers away from it. The model
+prompt engineering or relying on the context window being re-iterated on, I took the numbers away from it. The model
 writes a marker, such as "his tackles go here", and code replaces each marker
 with the figure from the database. Code also adds a table of the figures and a
 list of the sources. If the model types a figure itself, the answer is marked
