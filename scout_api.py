@@ -18,9 +18,12 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, field_validator
 
 from scout_backend import (
-    GoldRepository, LeaderboardArgs, MODEL_REQUEST_TIMEOUT_SECONDS, RANK_METRICS, ROLE_PROFILES,
+    ComparisonArgs, GoldRepository, LeaderboardArgs, MODEL_REQUEST_TIMEOUT_SECONDS, RANK_METRICS, ROLE_PROFILES,
     ScoutAssistant, ShortlistArgs,
 )
+
+
+from scout_charts import comparison_charts
 
 
 # Shared by the API and Streamlit chat; deployed environment variables take precedence.
@@ -181,6 +184,44 @@ def shortlist(
         return {"players": store.shortlist(args)}
     except Exception as exc:
         raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
+
+
+@app.get("/charts/compare", dependencies=[Depends(require_scout_key)])
+def compare_chart(
+    player_ids: list[int] = Query(min_length=2, max_length=6),
+    season: int = Query(),
+    position: str | None = Query(default=None, max_length=40),
+    store: GoldRepository = Depends(repository),
+) -> dict:
+    try:
+        args = ComparisonArgs(player_ids=player_ids, season=season, position=position)
+        return comparison_charts(store.comparison(args))
+    except ValueError as exc:
+        # The players cannot share a chart; the message says why.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail="Player data is unavailable") from exc
+
+
+def answer_charts(result: dict) -> dict | None:
+    """Charts for an answer that compared players in one season, or why there are none.
+
+    Drawn from the rows the answer used. A chart is an extra: a failure here is
+    logged and the answer is shown without one.
+    """
+    rows = [row for row in result.get("sources", [])
+            if row["source_id"] in result.get("used_sources", [])]
+    player_ids = list(dict.fromkeys(row["player_id"] for row in rows))
+    if not 2 <= len(player_ids) <= 6 or len({row["season"] for row in rows}) != 1:
+        return None
+    try:
+        args = ComparisonArgs(player_ids=player_ids, season=rows[0]["season"])
+        return comparison_charts(repository().comparison(args))
+    except ValueError as exc:
+        return {"note": f"No chart: {exc}."}
+    except Exception:
+        logging.getLogger("scout_backend").warning("Scout chart failed", exc_info=True)
+        return None
 
 
 @app.post("/scout/ask", dependencies=[Depends(require_scout_key)])

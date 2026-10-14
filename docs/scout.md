@@ -1,7 +1,8 @@
 # Scout
 
 Answers scouting questions from the gold tables. `scout_api.py` serves HTTP,
-`scout_chat_app.py` is a Streamlit chat, and `scout_backend.py` holds the
+`scout_chat_app.py` is a Streamlit chat, `scout_charts.py` draws the comparison
+charts, and `scout_backend.py` holds the
 queries and the assistant.
 
 ## Configuration
@@ -39,6 +40,7 @@ python -m streamlit run scout_chat_app.py   # chat
 | `GET /players/{player_id}/seasons` | A player's league seasons | |
 | `GET /leaderboard` | Top players on one metric | `metric`, `league_id`, `season`, `min_minutes` (default 450), `limit` |
 | `GET /shortlist` | Top players for a role | `role`, `season`, `league_id`, `max_age`, `min_minutes` (default 1500), `exclude_team`, `limit` |
+| `GET /charts/compare` | Two charts of two to six players in one season. See [Charts](#charts). | `player_ids` (repeat it), `season`, optional `position` |
 | `POST /scout/ask` | An answer and the season rows behind it | `question`, optional `history`; header `X-Scout-API-Key` |
 
 ```bash
@@ -124,6 +126,45 @@ to give an estimate beside the actual figure, never in its place.
 
 The extra fields make each row sent to the model about half as large again.
 
+## Charts
+
+`scout_charts.py` draws two charts of compared players from the rows
+`GoldRepository.comparison` returns. The model takes no part, so a chart costs
+no model tokens and cannot differ from the data. Each is a Vega-Lite
+specification, which Streamlit and any Vega-Lite client can draw.
+
+| Chart | Key in the response | Shows |
+| --- | --- | --- |
+| Percentiles | `percentiles` | One line per role statistic on a 0 to 100 axis, one dot per player |
+| Figures and ranges | `ranges` | One panel per statistic on its own scale: each player's figure with its [range](#ranges-and-estimates) as a line. Rating has no range and is left out. |
+
+| Part | Rule |
+| --- | --- |
+| One group | Every player is ranked among one position's players: the first player's, or `position` if given. The chart's subtitle names the group, its size and its minutes floor. |
+| Which players can share a chart | Those whose own position is in the same family as the group, listed below. Others are refused with the reason (422 from the API). |
+| A player from another position in the family | Ranked in the group, and named in the subtitle. His percentiles there differ from those in an answer, which are among his own position. |
+| Season | One season for everyone. A player with rows in two leagues is drawn from the one he played more in. |
+| Small samples | Marked † in the legend. A player under 90 minutes is named and not drawn. |
+| In the chat | Drawn under an answer that used rows for two to six players, all in one season. Otherwise there is no chart, or a line saying why. A chart that fails is logged and the answer shown without it. |
+| Colours | Fixed by the order of the players, checked for colour-blind separation |
+
+| Family | Positions |
+| --- | --- |
+| Midfield | Defensive Midfield, Central Midfield |
+| Attack | Attacking Midfield, Left Wing, Right Wing, Left Midfield, Right Midfield |
+| Forwards | Centre Forward, Secondary Striker |
+| Full backs | Left Back, Right Back |
+| Centre backs | Centre Back |
+| Goalkeepers | Goalkeeper |
+
+The families are `POSITION_FAMILIES` in `scout_backend.py`. The assistant's
+written answers are not limited by them: it still compares any two players,
+each among his own position.
+
+```bash
+curl 'http://localhost:8000/charts/compare?player_ids=4536524&player_ids=37550443&season=2025'   -H "X-Scout-API-Key: $SCOUT_API_KEY"
+```
+
 ## Markers
 
 The model does not type statistics. Where a figure belongs it writes a marker,
@@ -198,7 +239,7 @@ or the app's URL with `/logz` added. It shows the running app, not a history.
 
 | Surface | Protection |
 | --- | --- |
-| `POST /scout/ask`, `/players`, `/players/{player_id}/seasons`, `/leaderboard`, `/shortlist` | `SCOUT_API_KEY` in the `X-Scout-API-Key` header. Keep it server-side. With no key set they return 503. |
+| `POST /scout/ask`, `/players`, `/players/{player_id}/seasons`, `/leaderboard`, `/shortlist`, `/charts/compare` | `SCOUT_API_KEY` in the `X-Scout-API-Key` header. Keep it server-side. With no key set they return 503. |
 | `/health`, `/metrics` | None. They read no data. |
 | Chat, as the Databricks App | The workspace sign-in. Only users granted permission on the app reach it. |
 | Chat, run locally | `.streamlit/config.toml` makes it listen on this machine only. It has no sign-in of its own and ignores `SCOUT_API_KEY`, so do not start it with another `--server.address`. |

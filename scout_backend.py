@@ -297,6 +297,26 @@ class ShortlistArgs(BaseModel):
     limit: int = Field(ge=1, le=10)
 
 
+# Positions close enough to draw on one chart. A percentile is a rank within
+# one position, so players on one axis must all be ranked in the same group;
+# within a family that is a fair question, and across families it is not.
+POSITION_FAMILIES = [
+    {"Defensive Midfield", "Central Midfield"},
+    {"Attacking Midfield", "Left Wing", "Right Wing", "Left Midfield", "Right Midfield"},
+    {"Centre Forward", "Secondary Striker"},
+    {"Left Back", "Right Back"},
+    {"Centre Back"},
+    {"Goalkeeper"},
+]
+
+
+class ComparisonArgs(BaseModel):
+    player_ids: list[int] = Field(min_length=2, max_length=6)
+    season: int
+    # The position whose players everyone is ranked among; the first player's if not given.
+    position: str | None = Field(default=None, max_length=40)
+
+
 class GoldRepository:
     """Query only fixed gold tables with native SQL parameters."""
 
@@ -354,7 +374,7 @@ class GoldRepository:
         )
 
     def _with_percentiles(self, picked: str, parameters: list[Any], order_by: str,
-                          extra: str = "") -> list[dict[str, Any]]:
+                          extra: str = "", bounds: bool = False) -> list[dict[str, Any]]:
         """Run a selection of season rows and add each row's percentiles.
 
         picked is SQL selecting rows FROM seasons: the gold table plus passes
@@ -410,7 +430,10 @@ class GoldRepository:
                     row.pop(f"{metric}_estimate", None)
                 # A range reads as one value, so the model has one marker to write for it.
                 if f"{metric}_low" in row:
-                    low, high = row.pop(f"{metric}_low"), row.pop(f"{metric}_high")
+                    low, high = row[f"{metric}_low"], row[f"{metric}_high"]
+                    # A chart needs the two ends as numbers; a model row does not.
+                    if not bounds:
+                        del row[f"{metric}_low"], row[f"{metric}_high"]
                     row[f"{metric}_range"] = None if low is None or high is None else (
                         f"{show_value(metric, low)} to {show_value(metric, high)}")
         return rows
@@ -453,6 +476,50 @@ class GoldRepository:
                     LIMIT ?""",
             parameters, order_by,
         )
+
+    def comparison(self, args: ComparisonArgs) -> list[dict[str, Any]]:
+        """One season row for each player, all ranked among one position's players.
+
+        Each row's detailed_position is that group, and profile_position the
+        player's own. Raises ValueError when the players cannot share a chart.
+        """
+        player_ids = list(dict.fromkeys(args.player_ids))
+        if len(player_ids) < 2:
+            raise ValueError("Name at least two different players")
+        if args.position:
+            group, parameters = "?", [args.position]
+        else:
+            group = ("(SELECT max_by(detailed_position, minutes) FROM seasons "
+                     "WHERE player_id = ? AND season = ?)")
+            parameters = [player_ids[0], args.season]
+        # A player who moved leagues mid-season is drawn from the one he played most in.
+        rows = self._with_percentiles(
+            f"""SELECT * EXCEPT (detailed_position), detailed_position AS profile_position,
+                           {group} AS detailed_position
+                    FROM seasons
+                    WHERE player_id IN ({', '.join('?' * len(player_ids))}) AND season = ?
+                    QUALIFY row_number() OVER (PARTITION BY player_id
+                                               ORDER BY minutes DESC, league_id) = 1""",
+            [*parameters, *player_ids, args.season], "player_id",
+            extra="profile_position,", bounds=True,
+        )
+        found = {row["player_id"]: row for row in rows}
+        missing = [str(player_id) for player_id in player_ids if player_id not in found]
+        if missing:
+            raise ValueError(f"No {args.season} season in the data for player "
+                             + ", ".join(missing))
+        rows = [found[player_id] for player_id in player_ids]
+        group = rows[0]["detailed_position"]
+        family = next((family for family in POSITION_FAMILIES if group in family), None)
+        if family is None:
+            raise ValueError("The comparison group must be a playing position, such as "
+                             "Defensive Midfield")
+        for row in rows:
+            if row["profile_position"] not in family:
+                raise ValueError(
+                    f"{row['player_name']} is listed as {row['profile_position'] or 'no position'}, "
+                    f"which is too far from {group} to rank on one chart")
+        return rows
 
     def shortlist(self, args: ShortlistArgs) -> list[dict[str, Any]]:
         profile = ROLE_PROFILES.get(args.role)
@@ -887,6 +954,7 @@ class ScoutAssistant:
                                       "Try searching by surname or check the available season coverage.",
                             "sources": []}
                 typed: list[str] = []
+                used: list[str] = []
                 if sources:
                     filled, used, unknown = fill_markers(answer, sources)
                     typed = typed_figures(MARKER.sub(" ", answer), sources, allowed)
@@ -926,7 +994,7 @@ class ScoutAssistant:
                         answer += ("\n\nNot verified: the assistant typed these figures itself "
                                    "rather than taking them from the data: " + ", ".join(typed) + ".")
                 return {"answer": answer, "sources": list(sources.values()),
-                        "unverified_figures": typed}
+                        "unverified_figures": typed, "used_sources": used}
             if call_count + len(calls) > MAX_TOOL_CALLS:
                 raise RuntimeError("Assistant exceeded the data lookup limit")
             history.extend(response.output)
